@@ -1,6 +1,6 @@
 # Herdr for iPhone and iPad
 
-A universal SwiftUI app that reaches [herdr](https://github.com/ogulcancelik/herdr) on your Macs
+A universal SwiftUI app that reaches [herdr](https://herdr.dev) on your Macs
 and Windows PC over Tailscale. It opens an SSH connection with a PTY, runs herdr's attach command on
 the host, and renders the live TUI with SwiftTerm. herdr keeps every session running on the host,
 so the app can drop and reattach freely. Why it is built this way:
@@ -26,13 +26,15 @@ flowchart LR
    `scripts/qrcodegen.py` there first; Python 3.9+ on macOS or Windows):
 
    ```sh
-   python3 herdr-pair.py    # python on Windows; add --session phone to give the phone its own session
+   python3 herdr-pair.py    # python on Windows; --session NAME only for testing or phone-only work
    ```
 
    It shows a QR code. In the app, tap **Pair a Computer** (or scan with the Camera app, which
-   opens Herdr). Check the computer and account, tap **Pair**, then type `y` at the helper's
-   `Approve this device?` prompt. The app saves the host, trusts the host key from the code (no
-   fingerprint to compare), and opens herdr. The code works once and expires after 10 minutes.
+   opens Herdr). Check the computer and account, then tap **Pair**. The phone shows its own device
+   key (`SHA256:…`), and the helper's `Approve this device?` prompt shows the key of the device
+   asking. Compare the two, and type `y` only if they match. The app saves the host, trusts the
+   host key from the code (there's no host fingerprint to compare), and opens herdr. The code
+   works once and expires after 10 minutes.
    [ADR 0002](docs/adr/0002-qr-pairing.md) has the protocol.
 
 To add a computer by hand instead:
@@ -75,15 +77,17 @@ To add a computer by hand instead:
   keeps the other hosts attached.
 - **Editing a connected host** (address, user, platform, session, command) reconnects it with the
   new settings.
-- **Pairing errors** say what to do next: the computer declined, the code expired, the computer
-  presented a host key that isn't in the code, or this device already trusts a different key for
-  that address. Pairing never replaces a trusted key.
+- **Pairing errors** say what to do next: the computer declined, the code expired, another device
+  already used the code, the computer presented a host key that isn't in the code, or this device
+  already trusts a different key for that address. Pairing never replaces a trusted key.
 - **Changed host key.** If a host's key changes, the connection is refused. After a legitimate
   reinstall, open Edit Host, tap Forget Host Key, and trust the new key on the next connection.
 
-herdr sizes every pane in a session to its foreground client. Attaching a phone to the session you
-use at your desk therefore resizes that session's panes. Give the phone its own session, for
-example `phone`, in the host's herdr session field.
+**Which herdr session.** To see your agents, attach to the default session (leave the session
+field empty). A separate session is a separate set of workspaces and doesn't show the agents
+running in the default one. While the phone is herdr's foreground client, herdr sizes that
+session's panes to the phone. They go back to your desk's size when you type at the desk or the
+phone detaches. Use a separate session only for phone-only work or testing.
 
 ## Build
 
