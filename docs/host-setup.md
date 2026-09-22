@@ -165,9 +165,11 @@ needs no copying or typing on the phone. The protocol is [ADR 0002](adr/0002-qr-
 
 What the helper does:
 
-- It reads the host names and the computer name from `tailscale status --json` (MagicDNS name,
-  short name, `100.x` address; characters the phone rejects are dropped from the name) and the ed25519/ecdsa host keys from `ssh-keyscan 127.0.0.1`. `--host NAME`
-  (repeatable) replaces the names, and `--port` selects sshd's port.
+- It reads the host names (MagicDNS name, short name, `100.x` address) and the computer name
+  from `tailscale status --json`, and the ed25519/ecdsa host keys from `ssh-keyscan 127.0.0.1`.
+  `--host NAME` (repeatable) replaces the host names, and then the system hostname is the computer
+  name. `--port` selects sshd's port. Characters the phone rejects (control, bidi and other format
+  characters, separators, private use) are dropped from the computer name.
 - It adds one line to the same authorized_keys file `authorize-key.sh` targets:
 
   ```
