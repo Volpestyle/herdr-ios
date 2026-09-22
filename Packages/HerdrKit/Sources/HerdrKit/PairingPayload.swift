@@ -38,7 +38,12 @@ public struct PairingPayload: Sendable {
         id = try required("id")
         guard Self.base64URL(id, bytes: 16) != nil else { throw PairingPayloadError.invalidField("id") }
         name = try required("n")
-        guard name.count <= 64 else { throw PairingPayloadError.invalidField("n") }
+        guard name.count <= 64, name.unicodeScalars.allSatisfy({ scalar in
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .privateUse, .unassigned: false
+            default: true
+            }
+        }) else { throw PairingPayloadError.invalidField("n") }
         username = try required("u")
         guard !username.isEmpty, username.count <= 64,
               username.rangeOfCharacter(from: .controlCharacters.union(.whitespacesAndNewlines)) == nil else {

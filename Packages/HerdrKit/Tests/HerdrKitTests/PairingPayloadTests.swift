@@ -58,7 +58,8 @@ import Testing
     @Test func validatesCredentialAndProfileBoundaries() throws {
         let invalid: [String: [String]] = [
             "id": ["", "../state", base64URL(Data(repeating: 0, count: 15)), String(repeating: "A", count: 21) + "B"],
-            "n": [String(repeating: "x", count: 65)],
+            "n": [String(repeating: "x", count: 65), "Mac\nPC", "Mac\tPC"]
+                + [0x202E, 0x2028, 0x2029, 0xE000, 0x0378].map { "Mac" + String(UnicodeScalar($0)!) },
             "u": ["", "james volpe", "james\n", "james\t", "james" + String(UnicodeScalar(0)!), String(repeating: "u", count: 65)],
             "os": ["macos", "WINDOWS", ""],
             "p": ["0", "65536", "-1", "+22", "22.0", " 22", "٢٢", ""],
@@ -79,6 +80,14 @@ import Testing
                     try PairingPayload(url: url(input), now: now)
                 }
             }
+        }
+    }
+
+    @Test func preservesPrintableComputerNames() throws {
+        for name in ["James's Mac", "José’s Mac", "Café Mac", "Mac 💻"] {
+            var input = fields
+            input["n"] = name
+            #expect(try PairingPayload(url: url(input), now: now).name == name)
         }
     }
 
