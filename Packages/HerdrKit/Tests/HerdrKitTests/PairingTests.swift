@@ -29,7 +29,8 @@ import Testing
     @Test(arguments: [
         ("OK\n", 0, nil), ("OK\r\n", 0, nil), ("welcome\nOK\n\n", 0, nil), ("OK", 1, "failed"), ("OK", nil, "failed"),
         ("DENIED\r\n", 1, "denied"), ("DENIED", 0, "denied"), ("", 3, "denied"),
-        ("EXPIRED\r\n", 1, "expired"), ("", 4, "expired"), ("INVALID\n", 1, "failed"), ("OK\nINVALID\n", 0, "failed"),
+        ("EXPIRED\r\n", 1, "expired"), ("", 4, "expired"), ("USED\n", 5, "used"), ("USED\r\n", 1, "used"),
+        ("", 5, "used"), ("INVALID\n", 2, "failed"), ("INVALID\n", 1, "failed"), ("OK\nINVALID\n", 0, "failed"),
     ] as [(String, Int?, String?)])
     func verdictReadsTheResultToken(stdout: String, status: Int?, expected: String?) {
         let verdict = Pairing.verdict(status: status, stdout: Array(stdout.utf8), stderr: Array("warning: noise\n".utf8))
@@ -37,6 +38,7 @@ import Testing
         case nil: #expect(expected == nil)
         case .denied?: #expect(expected == "denied")
         case .expired?: #expect(expected == "expired")
+        case .used?: #expect(expected == "used")
         case .failed?: #expect(expected == "failed")
         default: Issue.record("unexpected \(String(describing: verdict))")
         }
@@ -168,6 +170,15 @@ struct PairingSSHDTests {
         #expect(try HostKeyPins.fingerprint(hostname: Self.host, port: 22) == nil)
     }
 
+    /// Another enroll claimed the code first: USED (exit 5), not a denial, and nothing is pinned.
+    @Test func codeClaimedByAnotherDeviceIsUsed() async throws {
+        let computer = try FakeComputer(mode: "used")
+        defer { computer.remove() }
+        let payload = try PairingPayload(url: computer.url(session: nil))
+        await #expect(throws: PairingError.used(output: "USED")) { try await Pairing.enroll(payload: payload, deviceName: "t") }
+        #expect(try HostKeyPins.fingerprint(hostname: Self.host, port: 22) == nil)
+    }
+
     @Test func deniedLeavesNoPin() async throws {
         let computer = try FakeComputer(mode: "deny")
         defer { computer.remove() }
@@ -230,6 +241,7 @@ struct FakeComputer {
           ok) echo OK; exit 0 ;;
           ok-noisy) echo OK; echo 'warning: noise' >&2; exit 0 ;;
           deny-as-1) printf 'DENIED\r\n'; exit 1 ;;
+          used) echo USED; exit 5 ;;
           deny) echo DENIED; exit 3 ;;
           expire) echo EXPIRED; exit 4 ;;
           hang) sleep 30 ;;

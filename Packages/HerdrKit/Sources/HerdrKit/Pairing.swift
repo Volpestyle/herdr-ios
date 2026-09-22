@@ -175,9 +175,10 @@ public enum Pairing {
         return (status, stdout, stderr)
     }
 
-    /// The helper's answer is the last non-empty stdout line: `OK`, `DENIED`, `EXPIRED` or `INVALID`.
-    /// The token wins over the exit status, because a Windows PowerShell DefaultShell turns the
-    /// helper's 3 and 4 into 1. Success still needs exit 0. `nil` means approved.
+    /// The helper's answer is the last non-empty stdout line: `OK`, `DENIED`, `EXPIRED`, `USED` or
+    /// `INVALID`. The token wins over the exit status, which is advisory because a Windows
+    /// PowerShell DefaultShell reports every non-zero exit as 1. Success still needs exit 0. `nil`
+    /// means approved.
     static func verdict(status: Int?, stdout: [UInt8], stderr: [UInt8]) -> PairingError? {
         let token = String(decoding: stdout, as: UTF8.self).split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.last { !$0.isEmpty }
@@ -186,6 +187,7 @@ public enum Pairing {
         case ("OK"?, 0?): return nil
         case ("DENIED"?, _), (nil, 3?): return .denied(output: tail)
         case ("EXPIRED"?, _), (nil, 4?): return .expired(output: tail)
+        case ("USED"?, _), (nil, 5?): return .used(output: tail)
         default: return .failed(status: status, output: tail)
         }
     }
@@ -251,6 +253,8 @@ public enum PairingError: Error, Equatable, Sendable, LocalizedError {
     case pairingKeyRejected
     case denied(output: String)
     case expired(output: String)
+    /// Another enroll claimed this code first, and its request may be waiting on the computer.
+    case used(output: String)
     case failed(status: Int?, output: String)
     case cancelled
 
@@ -267,6 +271,7 @@ public enum PairingError: Error, Equatable, Sendable, LocalizedError {
         case .pairingKeyRejected: "The computer didn't accept this pairing code. It may be used or expired; generate a new one."
         case .denied: "Pairing was declined on the computer."
         case .expired: "The request expired on the computer before it was approved. Generate a new code."
+        case .used: "Another device already used this code. Deny its request on the computer, then pair again."
         case let .failed(status, output):
             "Pairing failed" + (status.map { " (exit status \($0))" } ?? "") + (output.isEmpty ? "." : ":\n\(output)")
         case .cancelled: "Pairing was cancelled."
