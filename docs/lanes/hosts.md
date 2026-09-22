@@ -1,6 +1,8 @@
 # Lane: hosts (w29:p4)
 
-Owned paths: `docs/host-setup.md`, `scripts/**`, `docs/lanes/hosts.md`.
+Owned paths: `docs/host-setup.md`, `scripts/**`, `docs/lanes/hosts.md`. For pairing, that's
+`scripts/herdr-pair.py`, `scripts/herdr-pair.test.py`, `scripts/qrcodegen.py` and the pairing
+section of host-setup.
 
 Stage: done. The attach commands are in [host-setup](../host-setup.md#attach-commands) and went to
 transport (w29:p2) for `HerdrCommand.attach(platform:session:)` on 2026-09-21.
@@ -50,6 +52,52 @@ Administrators/SYSTEM/volpe. A second run reports `present`. `scripts/authorize-
 covers idempotency, perms, rejection of options and multi-line input, and SSH-failure exit status.
 Mutation checks confirmed it fails on the earlier pipe and the earlier validation. Neighbor w29:p7
 reviewed both fixes.
+
+## QR pairing helper (ADR 0002)
+
+Stage: done. `scripts/herdr-pair.py` (stdlib, Python 3.9+) plus vendored Nayuki `qrcodegen.py`
+(MIT header kept, upstream sha256 `9f4ed1dd…c8ef`). Usage and guarantees are in
+[host-setup › Pair with a QR code](../host-setup.md#pair-with-a-qr-code).
+
+Evidence, 2026-09-21:
+
+- `python3 scripts/herdr-pair.test.py --remote-windows volpe@supedupsilly 'C:\Users\volpe\herdr-pair-test'`
+  on this Mac, with `/usr/bin/python3` 3.9: all 40 checks pass.
+  - The local set covers RFC 3986 URL escaping, approve, claim-once bound to the claiming key,
+    deny, expiry, a late approval (EXPIRED, no key), a foreground deadline re-check, invalid
+    input, and SIGINT/SIGTERM cleanup.
+  - The same probes run against a private loopback sshd and against supedupsilly's real sshd
+    over the tailnet (Windows PowerShell default shell). The one-time key rebuilt from the QR
+    seed gets `INVALID` for `exec whoami`; `-t` gives "PTY allocation request failed"; the sftp
+    subsystem runs the enroll; `-R` is refused and `-L` gives "administratively prohibited".
+    Enroll then prints `OK`, the enrolled key logs in, the one-time key is rejected afterwards,
+    and a denial leaves no key.
+  - Both PC key files end byte-for-byte as they started.
+- On the PC itself (Python 3.11), the local set passes too (Windows exit for Ctrl+Break: 149).
+- Mutation checks: making the claim non-exclusive, dropping the deadline re-check, and dropping
+  the cleanup in `finally` each fail the suite.
+- The QR renderer's half-block output, turned back into modules and decoded with CoreImage,
+  returns the exact 345-char URL. It renders at 73×37 cells.
+- The app lane paired the iPhone simulator with this Mac end to end through `simctl openurl`.
+  That run found the `+`-for-space URL bug, now fixed with `quote_via=urllib.parse.quote` and
+  covered by a check.
+
+Incident: the first `--remote-windows` run's cleanup rewrote every candidate keys file, including
+the PC's unused `C:\ProgramData\ssh\administrators_authorized_keys`. Its key text was unchanged,
+but 2 CRLFs became LF. I restored it byte-for-byte from the 2026-09-16 shadow copy (sha256
+`95A5B128…FEE6A`, ACL unchanged). The cleanup now touches only files that contain the test key
+and keeps their line endings. The helper itself only ever wrote the per-user file.
+
+Protocol notes for the lead (ADR 0002 as implemented):
+
+1. Outcome `INVALID` (exit 2) covers a malformed key or name; the ADR lists only OK, DENIED and
+   EXPIRED. A second enroll for a used id answers `DENIED`. The enroll's approval wait ends at
+   the earlier of 120 s and the code's expiry.
+2. The enroll accepts `ssh-ed25519 <b64>` with a trailing comment and ignores the comment.
+3. Under Windows' PowerShell default shell, sshd reports exits 3 and 4 as 1. HerdrKit decides on
+   the token (transport, 88180ed).
+4. If the helper is killed outright (SIGKILL, or the Windows SSH session that launched it
+   dropping), the restricted line stays until its `expiry-time`. That's the documented backstop.
 
 ## Follow-ups
 

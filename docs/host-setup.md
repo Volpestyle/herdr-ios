@@ -133,9 +133,82 @@ herdr runs in the ConPTY that Windows OpenSSH allocates for the PTY. On connect,
 `ESC[?9001h` (win32-input-mode) and `ESC[?1004h` (focus reporting). A terminal that doesn't know
 mode 9001 ignores it, and ConPTY falls back to plain VT input.
 
-## Authorize the device key
+## Pair with a QR code
 
-The app shows its Ed25519 public key for copying. Authorize it with
+On a host that is already set up (sshd on, herdr on the SSH PATH, Tailscale connected), pairing
+needs no copying or typing on the phone. The protocol is [ADR 0002](adr/0002-qr-pairing.md).
+
+1. Put [`scripts/herdr-pair.py`](../scripts/herdr-pair.py) and
+   [`scripts/qrcodegen.py`](../scripts/qrcodegen.py) (Nayuki's MIT QR encoder) in one folder on
+   the computer. They need Python 3.9 or newer: `/usr/bin/python3` on macOS, the python.org
+   build on Windows. `ssh-keygen` and `ssh-keyscan` come with OpenSSH on both.
+2. In a terminal logged in as the account the phone should use, run
+   `python3 herdr-pair.py [--session NAME]` (`python` on Windows). It prints a black-on-white QR
+   code, about 73×37 cells, and the host-key fingerprint.
+3. Scan it with the Herdr app, or with the Camera app, which opens `herdr://pair?…`. The phone
+   shows the computer and account.
+4. The computer asks:
+
+   ```
+   Pairing request from 'James's iPhone'
+     device key SHA256:…
+   Approve this device? [y/N]
+   ```
+
+   `y` authorizes that exact key as `ssh-ed25519 … herdr-ios:<name>:<date>`. The phone pins the
+   host key from the QR code (no TOFU prompt), saves the host and attaches.
+
+What the helper does:
+
+- It reads the host names from `tailscale status --json` (MagicDNS name, short name, `100.x`
+  address) and the ed25519/ecdsa host keys from `ssh-keyscan 127.0.0.1`. `--host NAME`
+  (repeatable) replaces the names, and `--port` selects sshd's port.
+- It adds one line to the same authorized_keys file `authorize-key.sh` targets:
+
+  ```
+  restrict,expiry-time="…",from="100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.1,::1",command="<python> <herdr-pair.py> --enroll=<id> --state=<dir>" ssh-ed25519 … herdr-pair:<id>
+  ```
+
+  The key only runs the enroll command, only from the tailnet or loopback, for 10 minutes.
+  `restrict` refuses PTYs and all forwarding, and the forced command also replaces any exec or
+  subsystem request. On Windows the command uses 8.3 short paths, so it needs no quoting under
+  either cmd or PowerShell.
+- The line is removed on approval, denial, expiry, Ctrl+C, SIGTERM/SIGHUP and errors. If the
+  process is killed outright, `expiry-time` retires the key; so does the case where, on Windows,
+  the SSH session that started the helper drops. To clean up early, delete lines ending in
+  `herdr-pair:<id>`.
+- The pairing id is single use. The first enroll claims it with an exclusive create, and any
+  later enroll for that id is refused. The approval is bound to the key shown in the prompt. The
+  deadline is checked again at approval and before the key is written, so a late `y` authorizes
+  nothing.
+- Handoff files live in `~/.herdr-pair/` (macOS) or `%LOCALAPPDATA%\herdr-pair` (Windows), and
+  the folder is empty between pairings. The helper never prints the one-time seed or the full URL.
+
+The enroll command answers the phone with one token on stdout:
+
+| Token | Exit | Meaning |
+| --- | --- | --- |
+| `OK` | 0 | Approved; the device key is authorized |
+| `DENIED` | 3 | Denied at the prompt, or the id was already used |
+| `EXPIRED` | 4 | The 10-minute code or the 120 s approval window passed, or the answer came after the deadline |
+| `INVALID` | 2 | The key isn't a bare `ssh-ed25519`, or the device name is empty, longer than 64 characters, or has control characters |
+
+When the Windows default shell is PowerShell, sshd reports 3 and 4 as exit 1, so the token is
+what counts.
+
+Checks: `python3 scripts/herdr-pair.test.py` covers URL escaping, approve, claim-once,
+deny, expiry, a late approval, invalid input and signal cleanup. It uses a temp keys file, plus a
+private loopback sshd on macOS for the forced-command probes. Adding
+`--remote-windows volpe@supedupsilly 'C:\Users\volpe\herdr-pair-test'` runs the same probes
+against the PC's real sshd from the Mac. The Windows ssh client hangs on exit when it runs without
+a console, so the probes can't run on the PC itself. For an unattended end-to-end run, set
+`HERDR_PAIR_TEST=1` and pass `--print-url`, which prints the URL instead of the QR code, and
+answer the prompt on stdin (`echo y | …`). `--print-url`, `--state`, `--keys-file` and `--ttl`
+are refused without that variable.
+
+## Authorize the device key by hand
+
+Without the QR code, the app shows its Ed25519 public key for copying. Authorize it with
 [`scripts/authorize-key.sh`](../scripts/authorize-key.sh):
 
 ```sh
