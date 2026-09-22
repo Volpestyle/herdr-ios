@@ -45,6 +45,12 @@ from the existing identity and projects (macpad uses `DEVELOPMENT_TEAM = 8YW4D4C
 All lanes share the `main` checkout at `~/dev/herdr-ios`. Load `shared-checkout` before
 committing, commit only your own paths, and commit directly on `main`.
 
+Testing rule: herdr sizes every pane in a session to the foreground client's terminal
+(`effective_size` in `src/server/headless.rs`). An end-to-end attach at phone width against a
+host's default session would reflow every live agent pane there. All test attaches use a
+throwaway named session (`herdr-ios-test`, `hosts-probe`), and afterwards only that session gets
+deleted.
+
 ## HerdrKit contract (transport ↔ app)
 
 transport produces this API and app consumes it. Changes need both owners to agree directly, and
@@ -102,5 +108,5 @@ Changed host keys are refused inside HerdrKit. `confirmHostKey` is only asked on
 | --- | --- | --- |
 | transport | dispatched | build HerdrKit; integration-test against this Mac's sshd |
 | app | dispatched | scaffold, terminal UI, consume HerdrKit, simulator + device |
-| hosts | dispatched | verify herdr over SSH PTY on macOS and Windows; write host-setup |
+| hosts | accepted (b5fa037) | macOS + Windows attach verified; follow-up: stable herdr PATH on supedupsilly |
 | review | reserved | one bounded review when transport + app join |
