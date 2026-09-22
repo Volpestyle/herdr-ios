@@ -88,11 +88,14 @@ checks the deadline again at approval and write time and answers `EXPIRED` once 
 
 **Enroll exchange.** This is an exec channel with no PTY. The phone writes exactly two lines to
 stdin: its OpenSSH public key (`ssh-ed25519 <b64>`) and a device name (≤ 64 printable chars). The
-forced command validates both and writes a pending request to the helper's per-user state
-directory. It then waits up to 120 s for the helper's decision. On approval it authorizes the key
-with the comment `herdr-ios:<device name>:<date>` and prints `OK`, exiting 0. Otherwise it prints
-`DENIED` (exit 3) or `EXPIRED` (exit 4). A second enroll for the same id is refused, because the
-key is single use.
+forced command validates both (a trailing comment on the key is ignored) and writes a pending
+request to the helper's per-user state directory. It then waits for the helper's decision until
+120 s pass or the pairing expires, whichever comes first. On approval it authorizes the key with
+the comment `herdr-ios:<device name>:<date>` and prints `OK`, exiting 0. Otherwise it prints
+`DENIED` (exit 3), `EXPIRED` (exit 4) or `INVALID` (exit 2, malformed key or name). A second
+enroll for an id that has already been used answers `DENIED`. The last non-empty stdout line is
+the verdict. Exit codes are advisory, because Windows PowerShell reports every non-zero exit as
+1. If the helper is killed outright, the one-time line stays inert until its `expiry-time`.
 
 **Phone after OK.** Pin the presented host key under the hostname that connected
 (`HostKeyPins.pin`, add-only). If a different pin already exists for that host:port, pairing is
