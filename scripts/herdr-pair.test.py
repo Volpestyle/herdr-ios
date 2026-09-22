@@ -174,6 +174,9 @@ def url_checks():
     url = helper.pairing_url([("n", "James's MacBook Pro"), ("fp", "SHA256:a+b/c")])
     check("James%27s%20MacBook%20Pro" in url and "a%2Bb%2Fc" in url and "+" not in url,
           f"URL uses RFC 3986 escaping, no literal '+' ({url})")
+    check(helper.display_name("Evil\u202eMac\n\u2028\ue000Pro") == "EvilMacPro" and len(helper.display_name("x" * 99)) == 64
+          and helper.display_name("James's MacBook Pro 💻") == "James's MacBook Pro 💻",
+          "computer name drops what ADR 0002 rejects (bidi, control, separators, private use), max 64")
 
 
 def local_checks(port, phone_a, phone_b):

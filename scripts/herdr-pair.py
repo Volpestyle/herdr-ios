@@ -30,6 +30,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.parse
 
 WINDOWS = sys.platform == "win32"
@@ -366,6 +367,13 @@ def enable_windows_vt():
         kernel32.SetConsoleMode(handle, mode.value | 0x4)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
 
 
+def display_name(name):
+    """The computer name as the phone accepts it (ADR 0002 `n`): no control, format (bidi),
+    line/paragraph separator, surrogate, private-use or unassigned characters; at most 64."""
+    kept = "".join(c for c in name if unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn"))
+    return kept.strip()[:64] or "computer"
+
+
 def pairing_url(params):
     # RFC 3986 escaping (%20, %2B): iOS URLComponents keeps a literal "+" rather than reading a space.
     return "herdr://pair?" + urllib.parse.urlencode(params, safe=",:", quote_via=urllib.parse.quote)
@@ -393,7 +401,7 @@ def pair(args):
     line = (f'restrict,expiry-time="{time.strftime("%Y%m%d%H%M%S", time.localtime(expires))}",'
             f'from="{TAILNET_AND_LOOPBACK}",command="{forced_command(pair_id, state)}" '
             f"ssh-ed25519 {one_time_b64} herdr-pair:{pair_id}")
-    params = [("v", "1"), ("id", pair_id), ("n", display[:64]), ("u", getpass.getuser()),
+    params = [("v", "1"), ("id", pair_id), ("n", display_name(display)), ("u", getpass.getuser()),
               ("os", "windows" if WINDOWS else "unix"), ("h", ",".join(names)), ("p", str(args.port)),
               ("fp", ",".join(fps)), ("k", b64url(seed)), ("x", str(expires))]
     if args.session:

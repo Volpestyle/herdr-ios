@@ -157,15 +157,16 @@ needs no copying or typing on the phone. The protocol is [ADR 0002](adr/0002-qr-
    ```
 
    iOS reports only the model ("iPhone", "iPad") as the device name, so the fingerprint is what
-   identifies the phone. Anything typed before the prompt appears is discarded, so only an answer
+   identifies the phone. The phone shows its own device key on the pairing screen. Approve only if
+   it matches the prompt. Anything typed before the prompt appears is discarded, so only an answer
    given after reading it counts. `y` authorizes that exact key as
    `ssh-ed25519 … herdr-ios:<name>:<date>`. The phone pins the
    host key from the QR code (no TOFU prompt), saves the host and attaches.
 
 What the helper does:
 
-- It reads the host names from `tailscale status --json` (MagicDNS name, short name, `100.x`
-  address) and the ed25519/ecdsa host keys from `ssh-keyscan 127.0.0.1`. `--host NAME`
+- It reads the host names and the computer name from `tailscale status --json` (MagicDNS name,
+  short name, `100.x` address; characters the phone rejects are dropped from the name) and the ed25519/ecdsa host keys from `ssh-keyscan 127.0.0.1`. `--host NAME`
   (repeatable) replaces the names, and `--port` selects sshd's port.
 - It adds one line to the same authorized_keys file `authorize-key.sh` targets:
 
