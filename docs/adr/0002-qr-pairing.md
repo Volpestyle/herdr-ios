@@ -83,7 +83,8 @@ restrict,expiry-time="YYYYMMDDHHMMSS",from="100.64.0.0/10,fd7a:115c:a1e0::/48,12
 ```
 
 TTL is 10 minutes. The helper removes the line on success, denial, timeout, Ctrl+C and exit.
-`expiry-time` is the backstop if the helper dies.
+`expiry-time` is the backstop if the helper dies. It only gates authentication, so the helper
+checks the deadline again at approval and write time and answers `EXPIRED` once it has passed.
 
 **Enroll exchange.** This is an exec channel with no PTY. The phone writes exactly two lines to
 stdin: its OpenSSH public key (`ssh-ed25519 <b64>`) and a device name (≤ 64 printable chars). The
@@ -103,10 +104,12 @@ the entry that connected, `u`, `p`, `os`, session `s`), connect with `DeviceKey`
 - **QR leak (photo or shoulder-surf within the TTL).** The attacker also needs a tailnet node
   (`from=`), gets only the forced command, and their device key still needs the human's `y` on
   the computer, which shows the device name and key fingerprint.
-- **Malicious QR.** It can't set a command. It can only name a host on the tailnet. The phone
-  shows the computer and account before connecting, and the host key must match the QR, so a
-  malicious QR gets you a session to a machine the attacker already controls. That's the same
-  trust as typing that host in by hand.
+- **Malicious QR.** It can't set a command. Syntax checks alone don't prove a short name
+  resolves onto the tailnet, so HerdrKit checks the connected peer address after TCP connect and
+  before any SSH auth. It must be in `100.64.0.0/10` or `fd7a:115c:a1e0::/48`. The phone shows
+  the computer and account before connecting, and the host key must match the QR, so a malicious
+  QR gets you a session to a tailnet machine the attacker already controls. That's the same trust
+  as typing that host in by hand.
 - **Existing pins win.** A QR can't re-pin a host whose key changed. After `OK` the phone checks
   the pin state again before pinning, so a pin written in the meantime by another session is
   never replaced.
