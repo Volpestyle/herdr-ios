@@ -193,7 +193,7 @@ In `Packages/HerdrKit`:
 
 - `swift build`: clean, no warnings in HerdrKit sources. `xcodebuild -scheme HerdrKit
   -destination 'generic/platform=iOS Simulator' build`: `BUILD SUCCEEDED`.
-- `swift test`: 54 tests in 10 suites pass, including w29:p7's parser tests, and the 16 sshd
+- `swift test`: 55 tests in 10 suites pass, including w29:p7's parser tests, and the 16 sshd
   tests are skipped. Run with no network setup:
   - Attach strings match host-setup exactly.
   - Invalid names are quoted instead of trapping. The unix attach command goes through real
@@ -227,7 +227,7 @@ In `Packages/HerdrKit`:
     - A 16-case verdict table covers the token and status: CRLF, a banner before `OK`,
       `DENIED`/`EXPIRED`/`USED` with exit 1, a bare exit 3, 4 or 5, `OK` with a non-zero or
       missing status, and `INVALID`.
-- `HERDR_IOS_SSH_TEST=1 swift test`: 54 tests in 10 suites pass, against this Mac's sshd at
+- `HERDR_IOS_SSH_TEST=1 swift test`: 55 tests in 10 suites pass, against this Mac's sshd at
   `127.0.0.1:22` as `james` with the DeviceKey:
   - First use pins a fingerprint that is in `ssh-keyscan 127.0.0.1` | `ssh-keygen -l`.
   - `TERM=xterm-256color` and `stty size` = `24 80`. After `resize(120, 40)` and a sent line, it's
