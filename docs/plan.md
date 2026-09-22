@@ -21,6 +21,22 @@ Each lane owns its own record under `docs/lanes/` and its own paths.
 6. The README covers setup: the Tailscale app, Remote Login/OpenSSH on hosts, and authorizing the
    device key. Docs describe what exists.
 
+## Acceptance: QR pairing (added 2026-09-21 at the user's request)
+
+Protocol: [ADR 0002](adr/0002-qr-pairing.md).
+
+7. `python3 scripts/herdr-pair.py [--session NAME]` on a Mac or on the Windows PC shows a QR code
+   in the terminal. After you scan it (in-app scanner, or the system Camera via `herdr://`), the
+   phone shows the computer and account. Approving on the computer authorizes the device key,
+   pins the host key without a TOFU prompt, saves the host, and attaches to herdr. It involves no
+   typing on the phone.
+8. The one-time key is restricted (`restrict`, `from=` the tailnet, `expiry-time`, forced
+   command), is single use, and is removed on every exit path. A denial or expiry leaves no
+   device key behind. A QR can never set a remote command or overwrite an existing pin.
+9. Proven end to end in the simulator against this Mac and against supedupsilly, using
+   `simctl openurl` for the scan path, with throwaway sessions. Physical-device scanning is the
+   user's check.
+
 ## Tailnet facts
 
 | Device | Tailscale name | IP | Role |
@@ -41,6 +57,10 @@ from the existing identity and projects (macpad uses `DEVELOPMENT_TEAM = 8YW4D4C
 | app | w29:p3 | `project.yml`, `App/**`, `README.md` | [lanes/app.md](lanes/app.md) |
 | hosts | w29:p4 | `docs/host-setup.md`, `scripts/**` | [lanes/hosts.md](lanes/hosts.md) |
 | review | w29:p5 | none (reserved for one bounded review at integration) | this file |
+| pairing: host helper | w29:p4 | `scripts/herdr-pair.py`, `scripts/qrcodegen*.py`, pairing section of `docs/host-setup.md` | lanes/hosts.md |
+| pairing: HerdrKit | w29:p2 | `Packages/HerdrKit/**` (`PairingPayload`, `Pairing.enroll`) | lanes/transport.md |
+| pairing: app | w29:p3 | `App/**` (URL scheme, scanner, pairing flow) | lanes/app.md |
+| pairing: protocol review | w29:p7 (Codex, co-w) | none; issues go to the lead, who owns ADR 0002 | — |
 
 All lanes share the `main` checkout at `~/dev/herdr-ios`. Load `shared-checkout` before
 committing, commit only your own paths, and commit directly on `main`.
@@ -107,6 +127,7 @@ Changed host keys are refused inside HerdrKit. `confirmHostKey` is only asked on
 | Lane | Stage | Next action |
 | --- | --- | --- |
 | transport | accepted (4ec8f06 + review fixes c9a58c7) | none; app consumes it |
-| app | dispatched | scaffold, terminal UI, consume HerdrKit, simulator + device |
 | hosts | accepted (b5fa037) | macOS + Windows attach verified; known gap: PC PATH pins herdr 0.9.0 release folder (60f9d3a) |
-| review | HerdrKit: accept-with-fixes, fixed in c9a58c7 | app integration boundary when app lands |
+| app | accepted (245a04d, 8741db6, 7bd842c) | iPhone installed; iPad waits on unlock |
+| review | HerdrKit and app: accept-with-fixes, all fixed | pairing security review when it lands |
+| pairing | dispatched | p4 helper, p2 HerdrKit, p3 app, in parallel against ADR 0002 |
