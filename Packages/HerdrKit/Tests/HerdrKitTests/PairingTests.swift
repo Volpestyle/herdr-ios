@@ -25,6 +25,23 @@ import Testing
         #expect(Pairing.sanitizedDeviceName(String(repeating: "é", count: 100)).unicodeScalars.count == 64)
     }
 
+    /// The last non-empty stdout line decides; statuses 3 and 4 only matter when there is no token.
+    @Test(arguments: [
+        ("OK\n", 0, nil), ("OK\r\n", 0, nil), ("welcome\nOK\n\n", 0, nil), ("OK", 1, "failed"), ("OK", nil, "failed"),
+        ("DENIED\r\n", 1, "denied"), ("DENIED", 0, "denied"), ("", 3, "denied"),
+        ("EXPIRED\r\n", 1, "expired"), ("", 4, "expired"), ("INVALID\n", 1, "failed"), ("OK\nINVALID\n", 0, "failed"),
+    ] as [(String, Int?, String?)])
+    func verdictReadsTheResultToken(stdout: String, status: Int?, expected: String?) {
+        let verdict = Pairing.verdict(status: status, stdout: Array(stdout.utf8), stderr: Array("warning: noise\n".utf8))
+        switch verdict {
+        case nil: #expect(expected == nil)
+        case .denied?: #expect(expected == "denied")
+        case .expired?: #expect(expected == "expired")
+        case .failed?: #expect(expected == "failed")
+        default: Issue.record("unexpected \(String(describing: verdict))")
+        }
+    }
+
     @Test func enrollRequestIsKeyThenName() throws {
         let lines = try Pairing.enrollRequest(deviceName: "iPad\nrm -rf").split(separator: "\n", omittingEmptySubsequences: false)
         #expect(lines.count == 3 && lines[2].isEmpty)
@@ -134,6 +151,23 @@ struct PairingSSHDTests {
         #expect(received.prefix(5) == [Substring(deviceKey), "HerdrKit test iPad", "notty", "rest=", "orig=herdr-pair"])
     }
 
+    /// A stderr warning after `OK` doesn't hide the token (stdout and stderr are read separately).
+    @Test func okWithStderrNoiseStillPairs() async throws {
+        let computer = try FakeComputer(mode: "ok-noisy")
+        defer { computer.remove() }
+        let profile = try await Pairing.enroll(payload: try PairingPayload(url: computer.url(session: nil)), deviceName: "t")
+        #expect(profile.hostname == Self.host)
+    }
+
+    /// Windows PowerShell reports the helper's exit 3 as 1; the DENIED token still decides.
+    @Test func denialWithACollapsedStatusIsStillDenied() async throws {
+        let computer = try FakeComputer(mode: "deny-as-1")
+        defer { computer.remove() }
+        let payload = try PairingPayload(url: computer.url(session: nil))
+        await #expect(throws: PairingError.denied(output: "DENIED")) { try await Pairing.enroll(payload: payload, deviceName: "t") }
+        #expect(try HostKeyPins.fingerprint(hostname: Self.host, port: 22) == nil)
+    }
+
     @Test func deniedLeavesNoPin() async throws {
         let computer = try FakeComputer(mode: "deny")
         defer { computer.remove() }
@@ -194,6 +228,8 @@ struct FakeComputer {
         printf '%s\\n%s\\n%s\\nrest=%s\\norig=%s\\n' "$key" "$name" "$tty" "$rest" "$SSH_ORIGINAL_COMMAND" > "$out"
         case $mode in
           ok) echo OK; exit 0 ;;
+          ok-noisy) echo OK; echo 'warning: noise' >&2; exit 0 ;;
+          deny-as-1) printf 'DENIED\r\n'; exit 1 ;;
           deny) echo DENIED; exit 3 ;;
           expire) echo EXPIRED; exit 4 ;;
           hang) sleep 30 ;;

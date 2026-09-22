@@ -219,13 +219,15 @@ final class AuthWaiter: ChannelInboundHandler {
     }
 }
 
-enum SessionEvent: Sendable { case output([UInt8]), exitStatus(Int), error(String), closed }
+/// `stderr` only arrives without a PTY; a PTY carries both streams as `output`.
+enum SessionEvent: Sendable { case output([UInt8]), stderr([UInt8]), exitStatus(Int), error(String), closed }
 
 /// Session-channel handler: forwards stdout/stderr and lifecycle into an ordered stream, and
 /// completes `ready` once every request sent with wantReply is accepted.
 ///
-/// The channel runs with autoRead off. Each read burst becomes one `.output` event, and the
-/// consumer requests the next read, so at most one burst (at most one SSH window) sits in memory.
+/// The channel runs with autoRead off. Each read burst becomes one `.output` event (plus one
+/// `.stderr` event without a PTY), and the consumer requests the next read, so at most one burst
+/// (at most one SSH window) sits in memory.
 final class SessionChannelHandler: ChannelInboundHandler {
     typealias InboundIn = SSHChannelData
 
@@ -233,6 +235,7 @@ final class SessionChannelHandler: ChannelInboundHandler {
     private let events: AsyncStream<SessionEvent>.Continuation
     private var pendingReplies: Int  // one per request sent with wantReply
     private var burst: [UInt8] = []
+    private var stderrBurst: [UInt8] = []
 
     init(replies: Int, ready: EventLoopPromise<Void>, events: AsyncStream<SessionEvent>.Continuation) {
         pendingReplies = replies
@@ -242,18 +245,28 @@ final class SessionChannelHandler: ChannelInboundHandler {
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let data = unwrapInboundIn(data)
-        guard case .byteBuffer(let buffer) = data.data, data.type == .channel || data.type == .stdErr else { return }
-        burst.append(contentsOf: buffer.readableBytesView)
+        guard case .byteBuffer(let buffer) = data.data else { return }
+        switch data.type {
+        case .channel: burst.append(contentsOf: buffer.readableBytesView)
+        case .stdErr: stderrBurst.append(contentsOf: buffer.readableBytesView)
+        default: return
+        }
     }
 
     func channelReadComplete(context: ChannelHandlerContext) {
-        if burst.isEmpty {
+        if burst.isEmpty, stderrBurst.isEmpty {
             context.read()  // nothing for the consumer to take, so it won't ask; keep reading
         } else {
-            events.yield(.output(burst))
-            burst = []
+            flush()
         }
         context.fireChannelReadComplete()
+    }
+
+    private func flush() {
+        if !burst.isEmpty { events.yield(.output(burst)) }
+        if !stderrBurst.isEmpty { events.yield(.stderr(stderrBurst)) }
+        burst = []
+        stderrBurst = []
     }
 
     func channelActive(context: ChannelHandlerContext) {
@@ -284,7 +297,7 @@ final class SessionChannelHandler: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        if !burst.isEmpty { events.yield(.output(burst)) }
+        flush()
         ready.fail(ChannelError.eof)
         events.yield(.closed)
         events.finish()

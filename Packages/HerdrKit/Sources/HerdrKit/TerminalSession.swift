@@ -159,7 +159,7 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
     private func handle(_ event: SessionEvent, generation: Int) {
         guard isCurrent(generation) else { return }
         switch event {
-        case .output(let bytes):
+        case .output(let bytes), .stderr(let bytes):
             recentOutput = Array((recentOutput + bytes.suffix(4096)).suffix(4096))
             onOutput?(bytes)
             pty?.read()  // the next chunk

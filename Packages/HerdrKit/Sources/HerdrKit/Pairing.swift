@@ -114,21 +114,13 @@ public enum Pairing {
             defer { connection.close(promise: nil) }
             guard let presented = validator.presented.withLockedValue({ $0 }) else { throw PairingError.pairingKeyRejected }
 
-            let (status, output) = try await withTaskCancellationHandler {
+            let (status, stdout, stderr) = try await withTaskCancellationHandler {
                 try await exchange(on: connection, request: request, computer: invitation.name, progress: progress)
             } onCancel: {
                 connection.close(promise: nil)
             }
             try Task.checkCancellation()
-            let lines = String(decoding: output, as: UTF8.self).split(whereSeparator: \.isNewline)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-            let tail = SSHTransport.lastLines(output)
-            switch status {
-            case 0? where lines.contains("OK"): break
-            case 3?: throw PairingError.denied(output: tail)
-            case 4?: throw PairingError.expired(output: tail)
-            default: throw PairingError.failed(status: status, output: tail)
-            }
+            if let refusal = verdict(status: status, stdout: stdout, stderr: stderr) { throw refusal }
             // Add-only. If a pin appeared while the computer was deciding, it must be this key.
             if try !HostKeyPins.pin(presented, hostname: host, port: port),
                try HostKeyPins.fingerprint(hostname: host, port: port) != presented {
@@ -143,11 +135,11 @@ public enum Pairing {
     }
 
     /// Execs on the one-time key (its forced command runs whatever is asked; no PTY), writes the two
-    /// request lines, closes stdin, and reads until the command exits.
+    /// request lines, closes stdin, and reads stdout and stderr until the command exits.
     @MainActor
     private static func exchange(
         on connection: Channel, request: String, computer: String, progress: @MainActor (Progress) -> Void
-    ) async throws -> (status: Int?, output: [UInt8]) {
+    ) async throws -> (status: Int?, stdout: [UInt8], stderr: [UInt8]) {
         let (events, sink) = AsyncStream<SessionEvent>.makeStream()
         let ready = connection.eventLoop.makePromise(of: Void.self)
         let channel = try await SSHTransport.openSessionChannel(on: connection, replies: 1, ready: ready, events: sink)
@@ -166,17 +158,36 @@ public enum Pairing {
         let timeout = connection.eventLoop.scheduleTask(in: approvalTimeout) { connection.close(promise: nil) }
         defer { timeout.cancel() }
         var status: Int?
-        var output: [UInt8] = []
+        var stdout: [UInt8] = []
+        var stderr: [UInt8] = []
         for await event in events {
             switch event {
             case .output(let bytes):
-                output = Array((output + bytes).suffix(16_384))
+                stdout = Array((stdout + bytes).suffix(16_384))
+                channel.read()
+            case .stderr(let bytes):
+                stderr = Array((stderr + bytes).suffix(16_384))
                 channel.read()
             case .exitStatus(let code): status = code
             case .error, .closed: break
             }
         }
-        return (status, output)
+        return (status, stdout, stderr)
+    }
+
+    /// The helper's answer is the last non-empty stdout line: `OK`, `DENIED`, `EXPIRED` or `INVALID`.
+    /// The token wins over the exit status, because a Windows PowerShell DefaultShell turns the
+    /// helper's 3 and 4 into 1. Success still needs exit 0. `nil` means approved.
+    static func verdict(status: Int?, stdout: [UInt8], stderr: [UInt8]) -> PairingError? {
+        let token = String(decoding: stdout, as: UTF8.self).split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.last { !$0.isEmpty }
+        let tail = SSHTransport.lastLines(stdout + [0x0A] + stderr)
+        switch (token, status) {
+        case ("OK"?, 0?): return nil
+        case ("DENIED"?, _), (nil, 3?): return .denied(output: tail)
+        case ("EXPIRED"?, _), (nil, 4?): return .expired(output: tail)
+        default: return .failed(status: status, output: tail)
+        }
     }
 
     /// Line 1: the device key as `ssh-ed25519 <base64>`. Line 2: the device name.

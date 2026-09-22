@@ -104,7 +104,11 @@ How `enroll` runs:
    `ssh-ed25519 <b64>\n<device name>\n`, closes stdin, and reads until exit. The device name is
    cut to 64 printable code points. Spaces become a plain space; control and format characters
    are dropped. The phone gives up after 180 s, and the host waits up to 120 s.
-5. Success needs exit 0 and an `OK` line. The pin is add-only. If `pin` returns false and the pin
+5. The helper's answer is its last non-empty stdout line (`OK`, `DENIED`, `EXPIRED`, `INVALID`).
+   stdout and stderr are read separately, so a trailing warning can't hide the answer. The token
+   wins over the exit status, because a Windows PowerShell DefaultShell turns the helper's 3 and 4
+   into 1. Statuses 3 and 4 still count when no token arrives. Success needs `OK` and exit 0.
+   The pin is add-only. If `pin` returns false and the pin
    that is there isn't the presented key, enroll fails with `conflictingPin`.
 
 ## Decisions
@@ -186,7 +190,7 @@ In `Packages/HerdrKit`:
 
 - `swift build`: clean, no warnings in HerdrKit sources. `xcodebuild -scheme HerdrKit
   -destination 'generic/platform=iOS Simulator' build`: `BUILD SUCCEEDED`.
-- `swift test`: 49 tests in 10 suites pass, including w29:p7's parser tests, and the 13 sshd
+- `swift test`: 52 tests in 10 suites pass, including w29:p7's parser tests, and the 15 sshd
   tests are skipped. Run with no network setup:
   - Attach strings match host-setup exactly.
   - Invalid names are quoted instead of trapping. The unix attach command goes through real
@@ -217,7 +221,10 @@ In `Packages/HerdrKit`:
     - A stale `expiresAt` gives `linkExpired` without connecting.
     - The tailnet predicate passes 5 addresses and refuses 8. Device names are sanitized. The
       request is exactly two lines.
-- `HERDR_IOS_SSH_TEST=1 swift test`: 49 tests in 10 suites pass, against this Mac's sshd at
+    - A 12-case verdict table covers the token and status: CRLF, a banner before `OK`,
+      `DENIED`/`EXPIRED` with exit 1, a bare exit 3 or 4, `OK` with a non-zero or missing status,
+      and `INVALID`.
+- `HERDR_IOS_SSH_TEST=1 swift test`: 52 tests in 10 suites pass, against this Mac's sshd at
   `127.0.0.1:22` as `james` with the DeviceKey:
   - First use pins a fingerprint that is in `ssh-keyscan 127.0.0.1` | `ssh-keygen -l`.
   - `TERM=xterm-256color` and `stty size` = `24 80`. After `resize(120, 40)` and a sent line, it's
@@ -238,7 +245,9 @@ In `Packages/HerdrKit`:
       no `remoteCommand`. The pin is one of sshd's non-RSA keys. The helper received the device
       key and the sanitized name with no TTY, stdin reached EOF, and `SSH_ORIGINAL_COMMAND` was
       the phone's ignored `herdr-pair`.
-    - Denied (exit 3) and expired (exit 4) give typed errors and leave no pin.
+    - Denied (exit 3) and expired (exit 4) give typed errors and leave no pin. `DENIED\r\n` with
+      exit 1 (Windows-style) is still denied.
+    - `OK` followed by a stderr warning still pairs.
     - Cancelling while waiting returns `.cancelled` in under 5 s, with no pin.
     - Comparing `authorized_keys` before and after a run shows no line of mine left behind. (A
       one-time line from w29:p4's live helper came and went during the run, untouched.)
