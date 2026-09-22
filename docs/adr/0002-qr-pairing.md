@@ -61,7 +61,7 @@ sequenceDiagram
 | --- | --- | --- |
 | `v` | protocol version, `1` | reject anything else |
 | `id` | pairing id, 16 random bytes, base64url | 22 chars `[A-Za-z0-9_-]` |
-| `n` | computer display name | ≤ 64 chars, shown to the user, never executed |
+| `n` | computer display name | ≤ 64 chars; rejects Unicode control, format (incl. bidi overrides), line/paragraph separators, surrogates, private-use and unassigned scalars; shown to the user, never executed |
 | `u` | SSH username | ≤ 64 chars, no control chars or whitespace |
 | `os` | `unix` or `windows` | enum |
 | `h` | comma list of hostnames, preferred first (MagicDNS FQDN, then short name, then `100.x`) | each canonicalized via `HostKeyPins.canonical`; ≤ 4 entries; tailnet names/IPs only (`*.ts.net`, a single label, `100.64.0.0/10`, `fd7a:115c:a1e0::/48`) |
