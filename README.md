@@ -22,7 +22,22 @@ flowchart LR
 2. **SSH on each host.** macOS: turn on Remote Login. Windows: install and start OpenSSH Server.
    herdr must be installed on the host. [docs/host-setup.md](docs/host-setup.md) has the exact
    steps and the attach command each platform runs.
-3. **Authorize this device's key.** Each device makes its own Ed25519 key in its Keychain (it
+3. **Pair.** On the computer, run the pairing helper (copy `scripts/herdr-pair.py` and
+   `scripts/qrcodegen.py` there first; Python 3.9+ on macOS or Windows):
+
+   ```sh
+   python3 herdr-pair.py    # python on Windows; add --session phone to give the phone its own session
+   ```
+
+   It shows a QR code. In the app, tap **Pair a Computer** (or scan with the Camera app, which
+   opens Herdr). Check the computer and account, tap **Pair**, then type `y` at the helper's
+   `Approve this device?` prompt. The app saves the host, trusts the host key from the code (no
+   fingerprint to compare), and opens herdr. The code works once and expires after 10 minutes.
+   [ADR 0002](docs/adr/0002-qr-pairing.md) has the protocol.
+
+To add a computer by hand instead:
+
+1. **Authorize this device's key.** Each device makes its own Ed25519 key in its Keychain (it
    never leaves the device). In the app, tap the key button, then Copy Key or Share Key. On the
    host, add it with the helper, which is idempotent and tags the line `herdr-ios` for easy
    revocation:
@@ -34,10 +49,10 @@ flowchart LR
    ```
 
    Pasting the line into `~/.ssh/authorized_keys` by hand also works.
-4. **Add the host.** Tap +, then enter a name, the hostname, port, user, and platform. You can
+2. **Add the host.** Tap +, then enter a name, the hostname, port, user, and platform. You can
    also set a herdr session name (empty means herdr's default session), a command override, and a
    password fallback that is kept in the Keychain.
-5. **Connect.** Tap the host. On the first connection the app shows the host key's SHA256
+3. **Connect.** Tap the host. On the first connection the app shows the host key's SHA256
    fingerprint. Check it on the host with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` (on
    Windows, `ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`), then tap Trust.
 
@@ -60,6 +75,9 @@ flowchart LR
   keeps the other hosts attached.
 - **Editing a connected host** (address, user, platform, session, command) reconnects it with the
   new settings.
+- **Pairing errors** say what to do next: the computer declined, the code expired, the computer
+  presented a host key that isn't in the code, or this device already trusts a different key for
+  that address. Pairing never replaces a trusted key.
 - **Changed host key.** If a host's key changes, the connection is refused. After a legitimate
   reinstall, open Edit Host, tap Forget Host Key, and trust the new key on the next connection.
 

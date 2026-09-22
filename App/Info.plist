@@ -18,8 +18,21 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.volpestyle.herdr.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>herdr</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Herdr scans the pairing code herdr-pair shows on your computer.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Herdr connects to your computers over SSH on your tailnet.</string>
 	<key>UIApplicationSceneManifest</key>

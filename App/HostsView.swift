@@ -10,6 +10,7 @@ struct HostsView: View {
     @State private var columns = NavigationSplitViewVisibility.automatic
     @State private var editing: HostProfile?
     @State private var showingDeviceKey = false
+    @State private var pairing: PairingRoute?
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
@@ -33,9 +34,11 @@ struct HostsView: View {
                     ContentUnavailableView {
                         Label("No Hosts", systemImage: "desktopcomputer")
                     } description: {
-                        Text("Add a Mac or PC on your tailnet, then authorize this device's key on it.")
+                        Text("Run herdr-pair on a Mac or PC on your tailnet, then scan its code.")
                     } actions: {
-                        Button("Add Host") { editing = .draft() }
+                        Button("Pair a Computer") { pairing = .scan }
+                            .buttonStyle(.borderedProminent)
+                        Button("Add Manually") { editing = .draft() }
                         Button("Show Device Key") { showingDeviceKey = true }
                     }
                 }
@@ -45,8 +48,9 @@ struct HostsView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Device Key", systemImage: "key") { showingDeviceKey = true }
                 }
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
                     Button("Add Host", systemImage: "plus") { editing = .draft() }
+                    Button("Pair Computer", systemImage: "qrcode.viewfinder") { pairing = .scan }
                 }
             }
         } detail: {
@@ -66,6 +70,16 @@ struct HostsView: View {
         }
         .sheet(isPresented: $showingDeviceKey) {
             NavigationStack { DeviceKeyView() }
+        }
+        .sheet(item: $pairing) { route in
+            PairingFlow(route: route) { host in selection = host.id }
+        }
+        // herdr://pair links, from the system Camera or `simctl openurl`.
+        .onOpenURL { url in
+            guard url.scheme == "herdr", url.host() == "pair" else { return }
+            editing = nil
+            showingDeviceKey = false
+            pairing = .link(url)
         }
     }
 

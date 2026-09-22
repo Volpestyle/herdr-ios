@@ -49,6 +49,11 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        # herdr://pair links from herdr-pair's QR code; the system Camera opens them in the app.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.volpestyle.herdr.pair
+            CFBundleURLSchemes: [herdr]
+        NSCameraUsageDescription: Herdr scans the pairing code herdr-pair shows on your computer.
         # Tailscale addresses (100.64.0.0/10) are private-range LAN peers to iOS.
         NSLocalNetworkUsageDescription: Herdr connects to your computers over SSH on your tailnet.
     settings:

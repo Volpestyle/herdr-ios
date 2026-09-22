@@ -25,6 +25,16 @@ running on the physical iPhone. The iPad install waits on the iPad being unlocke
   or popping back on iPhone, leaves the other sessions attached.
 - `App/TerminalContainer.swift`: `HerdrTerminalView` (a SwiftTerm `TerminalView` subclass), the
   hosting view with its gestures, and the `KeyBar` input accessory.
+- `App/PairingFlow.swift`: QR pairing ([ADR 0002](../adr/0002-qr-pairing.md)). `herdr://pair`
+  links arrive through `onOpenURL` (the system Camera, or `simctl openurl`) or the in-app
+  **Scan Computer** scanner (VisionKit `DataScannerViewController`, QR only). The scanner ignores
+  any other code. Where there is no camera (Simulator, unsupported hardware) the scanner falls back
+  to text pointing at the Camera app and manual entry. The review sheet shows the computer name,
+  account, address, platform, session and the code's host-key fingerprints. **Pair** runs
+  `Pairing.enroll`, shows "Connecting to …" and then "Waiting for approval on …", then saves the
+  returned host and opens its terminal. Re-pairing the same account updates that host instead of
+  adding a twin. Every failure says what to do next. The device name is `UIDevice.current.name`.
+  "Pair a Computer" is the primary empty-state action and a toolbar button. Manual add stays.
 - `App/TerminalScreen.swift`: the terminal, a status overlay (connecting, reconnecting, failed
   with the multi-line reason, session ended), and the host-key sheet.
 
@@ -137,6 +147,28 @@ mouse-encoding bug above. These results are from after the fix.
 The iPad tap points moved from `dy 0.5` to `dy 0.3`. In iPad landscape with the keyboard up,
 `0.5` lands on the bottom edge of herdr's panes, which on Windows draws a scroll track.
 
+### QR pairing against this Mac
+
+`HerdrUITests.testPairing` was driven by a script that ran p4's
+`HERDR_PAIR_TEST=1 python3 scripts/herdr-pair.py --session herdr-ios-test --print-url` under a pty.
+It delivered the printed link with `xcrun simctl openurl` and answered the helper's `Approve this
+device? [y/N]` prompt. The simulators' manually authorized keys were removed first, so the only
+way in was the key that pairing authorized.
+
+| Case | iPhone | iPad | Host-side proof |
+| --- | --- | --- | --- |
+| Approve (`y`) | `pair-mac-iphone-review.png`, `-waiting.png`, `-connected.png` | `pair-mac-ipad-review.png`, `-waiting.png`, `-connected.png` | helper exit 0. `authorized_keys` gains `herdr-ios:iPhone-17-Pro-Max:2026-09-21` and `herdr-ios:iPad-Pro-13-inch-M5:2026-09-21`. No `herdr-pair:` line is left. The phone lands in `herdr-ios-test` with no trust prompt (the test fails on one) |
+| Deny (`n`) | `pair-denied-iphone-review.png`, `-waiting.png`, `-failed.png` ("…declined this device. Nothing was added.") | | helper exit 3, "Denied; nothing was authorized." No device key is added and no one-time line is left |
+| Tampered `fp`, pinned FQDN | `pair-conflict-iphone-failed.png` (already trusts a different key, pairing never replaces one) | | refused before the one-time key is used. The helper is stopped with Ctrl+C and its line is removed |
+| Tampered `fp`, unpinned short name | `pair-mismatch-iphone-failed.png` (presented a key that isn't in the pairing code) | | same |
+
+An expired code is rejected by the parser before any connection, with p7's
+`PairingPayloadError.expired` text.
+
+The first happy-path run showed the computer as `James's+MacBook+Pro`: the helper form-encoded
+spaces as `+`, and `URLComponents` keeps `+` literal. p4 fixed the helper (`quote_via=quote`).
+The runs above are from after the fix.
+
 ### Host-key pinning
 
 `HerdrUITests.testHostKeyPinning` ran against a throwaway user-level sshd on `127.0.0.1:2222`,
@@ -192,6 +224,9 @@ Package Graph" for 10+ minutes after a test.
   because SwiftTerm's Metal shaders don't build without it.
 
 ## Gaps
+
+- QR pairing against the Windows PC is pending p4's go-ahead. It shares the PC's
+  `authorized_keys` with p4's own Windows proof.
 
 - The iPad install and launch wait on an unlock.
 - The physical devices' keys are not authorized on any host yet. That needs the Device Key screen

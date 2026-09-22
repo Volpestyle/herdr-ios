@@ -97,6 +97,50 @@ final class HerdrUITests: XCTestCase {
         snap("reattached")
     }
 
+    /// QR pairing through the URL scheme. The driver runs herdr-pair on the host, delivers its
+    /// link with `simctl openurl` once $EVIDENCE_DIR/<tag>-pair-ready exists, and answers the
+    /// approval prompt. HERDR_TEST_EXPECT=paired (default) lands in herdr without a trust prompt;
+    /// any other value is text the failure message must contain.
+    func testPairing() throws {
+        let dir = try XCTUnwrap(env["EVIDENCE_DIR"])
+        FileManager.default.createFile(atPath: "\(dir)/\(tag)-pair-ready", contents: nil)
+        let open = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Open"]
+        let pair = app.buttons["Pair"]
+        let unusable = app.staticTexts["Can't Use This Code"]
+        let deadline = Date().addingTimeInterval(90)
+        while !pair.exists, !unusable.exists, Date() < deadline {
+            if open.exists { open.tap() }
+            sleep(1)
+        }
+        if open.exists { open.tap() }
+        let expect = env["HERDR_TEST_EXPECT"] ?? "paired"
+        if unusable.exists {  // rejected before any connection, e.g. an expired code
+            snap("pair-invalid")
+            XCTAssert(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", expect)).firstMatch.exists)
+            return
+        }
+        XCTAssert(pair.exists, "no pairing sheet")
+        sleep(1)  // let the sheet finish presenting
+        snap("pair-review")
+        pair.tap()
+        let waiting = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Waiting for approval'")).firstMatch
+        let failure = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", expect)).firstMatch
+        // A host-key mismatch or pin conflict is refused before the approval step.
+        let reached = Date().addingTimeInterval(30)
+        while !waiting.exists, !(expect != "paired" && failure.exists), Date() < reached { sleep(1) }
+        if waiting.exists { snap("pair-waiting") }
+        if expect == "paired" {
+            XCTAssert(waiting.exists, "never waited for approval")
+            XCTAssert(waiting.waitForNonExistence(timeout: 150))
+            waitConnected(trust: false)
+            snap("pair-connected")
+        } else {
+            let failed = failure.waitForExistence(timeout: 150)
+            snap("pair-failed")
+            XCTAssert(failed, "no failure containing \(expect)")
+        }
+    }
+
     /// Host-key pinning against a throwaway sshd at $HERDR_TEST_ALT_PORT on 127.0.0.1.
     /// HERDR_TEST_STEP=first expects the first-use prompt; =changed runs after the host key was
     /// swapped and expects a refusal, then recovers through Forget Host Key.
@@ -169,13 +213,15 @@ final class HerdrUITests: XCTestCase {
         app.buttons[label].firstMatch.tap()
     }
 
-    private func waitConnected(timeout: TimeInterval = 45) {
+    /// `trust: false` fails on a first-use prompt: a paired host is already pinned.
+    private func waitConnected(trust: Bool = true, timeout: TimeInterval = 45) {
         let busy = ["Connecting…", "Reconnecting…"]
         var sawReconnect = false
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if app.buttons["Trust"].exists {
                 snap("trust-host-key")
+                XCTAssert(trust, "unexpected host-key prompt")
                 app.buttons["Trust"].tap()
             }
             for failure in ["Couldn't Connect", "Session Ended", "Host Key Changed"] where app.staticTexts[failure].exists {
