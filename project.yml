@@ -1,0 +1,97 @@
+name: Herdr
+options:
+  bundleIdPrefix: com.volpestyle
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: 8YW4D4C6CW
+packages:
+  HerdrKit:
+    path: Packages/HerdrKit
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: "1.20.0"
+targets:
+  Herdr:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - UITests
+          - Tests
+    dependencies:
+      - package: HerdrKit
+      - package: SwiftTerm
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Herdr
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          # One scene: a session's terminal view can only live in one window.
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Tailscale addresses (100.64.0.0/10) are private-range LAN peers to iOS.
+        NSLocalNetworkUsageDescription: Herdr connects to your computers over SSH on your tailnet.
+    settings:
+      base:
+        PRODUCT_NAME: Herdr
+        PRODUCT_BUNDLE_IDENTIFIER: com.volpestyle.herdr
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ENABLE_PREVIEWS: YES
+  HerdrTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - App/Tests
+    dependencies:
+      - target: Herdr
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.volpestyle.herdr.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Herdr.app/Herdr
+        BUNDLE_LOADER: $(TEST_HOST)
+  # Drives the app against a live host for the simulator evidence in docs/lanes/app.md.
+  HerdrUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - App/UITests
+    dependencies:
+      - target: Herdr
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.volpestyle.herdr.uitests
+        # XCUIApplication is main-actor isolated and XCTestCase's lifecycle isn't.
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+schemes:
+  Herdr:
+    build:
+      targets:
+        Herdr: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - HerdrTests
+        - HerdrUITests
