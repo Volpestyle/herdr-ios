@@ -3,7 +3,8 @@
 Owned paths: `project.yml`, `App/**`, `README.md`, `docs/lanes/app.md`, `docs/evidence/app/**`.
 
 Stage: done on the iPhone 17 Pro Max and iPad Pro 13-inch (M5) simulators, against this Mac and
-against the Windows PC `supedupsilly`, both over Tailscale. The signed build is installed and
+against the Windows PC `supedupsilly`, both over Tailscale. That covers the terminal flow and QR
+pairing. The signed build is installed and
 running on the physical iPhone. The iPad install waits on the iPad being unlocked (see
 [Devices](#devices)).
 
@@ -162,6 +163,22 @@ way in was the key that pairing authorized.
 | Tampered `fp`, pinned FQDN | `pair-conflict-iphone-failed.png` (already trusts a different key, pairing never replaces one) | | refused before the one-time key is used. The helper is stopped with Ctrl+C and its line is removed |
 | Tampered `fp`, unpinned short name | `pair-mismatch-iphone-failed.png` (presented a key that isn't in the pairing code) | | same |
 
+### QR pairing against the Windows PC
+
+Same test, with p4's copy of the helper on `supedupsilly`, run over plain SSH as p4 verified it.
+There's no remote TTY, so ConPTY can't wrap the 340-character link:
+`ssh volpe@100.108.214.60 '$env:HERDR_PAIR_TEST=1; python C:\Users\volpe\herdr-pair-test\herdr-pair.py --print-url --session herdr-ios-test'`.
+The helper takes its name and addresses from Tailscale (`SupedUpSilly`,
+`supedupsilly.tailb90f24.ts.net`).
+
+| Case | iPhone | iPad | PC-side proof |
+| --- | --- | --- | --- |
+| Approve (`y`) | `pair-pc-iphone-review.png`, `-waiting.png`, `-connected.png` (PowerShell in herdr's mobile layout) | `pair-pc-ipad-review.png`, `-waiting.png`, `-connected.png` (desktop layout) | helper exit 0. The per-user `authorized_keys` gains `herdr-ios:iPhone-17-Pro-Max:2026-09-21`, then `herdr-ios:iPad-Pro-13-inch-M5:2026-09-21`. No `herdr-pair:` line is left, and `herdr-ios-test` has pane `w1:p1` from the attach |
+| Deny (`n`) | `pair-pc-denied-iphone-review.png`, `-waiting.png`, `-failed.png` ("SupedUpSilly declined this device. Nothing was added.") | | Under PowerShell the helper's exit status collapses to 1. The phone still reports a denial, because HerdrKit reads the `DENIED` token (88180ed). No key is added |
+
+Afterwards the paired keys were removed from both hosts, and `herdr-ios-test` was deleted on both.
+Each `authorized_keys` is back to its lines from before this lane.
+
 An expired code is rejected by the parser before any connection, with p7's
 `PairingPayloadError.expired` text.
 
@@ -214,19 +231,20 @@ Package Graph" for 10+ minutes after a test.
 
 ## Changes outside the repo
 
-- `~/.ssh/authorized_keys` on this Mac has two added lines, tagged `herdr-ios-sim-iphone` and
-  `herdr-ios-sim-ipad` (written by `scripts/authorize-key.sh local`). They are the simulators'
-  device keys. Remove them with `sed -i '' '/herdr-ios-sim-/d' ~/.ssh/authorized_keys`.
-- The PC's `C:\Users\volpe\.ssh\authorized_keys` got the same two keys for the Windows runs. They
-  are already removed, and only the two original lines remain. Its `herdr-ios-test` session is
-  deleted.
+- `~/.ssh/authorized_keys` on this Mac: the simulators' keys (`herdr-ios-sim-*` from
+  `authorize-key.sh`, and later `herdr-ios:<device>:<date>` from pairing) were all removed again.
+  The remaining `herdr-ios-test` and `supedupsilly-to-mac` lines belong to the transport and hosts
+  lanes.
+- The PC's `C:\Users\volpe\.ssh\authorized_keys` got the simulators' keys for the Windows and
+  pairing runs. They are removed, and only the two original lines remain. Its `herdr-ios-test`
+  session is deleted.
 - Xcode's Metal Toolchain component is installed (`xcodebuild -downloadComponent MetalToolchain`),
   because SwiftTerm's Metal shaders don't build without it.
 
 ## Gaps
 
-- QR pairing against the Windows PC is pending p4's go-ahead. It shares the PC's
-  `authorized_keys` with p4's own Windows proof.
+- QR pairing on a physical device (the in-app scanner and the system Camera) is the user's check,
+  per acceptance 9. The Simulator has no camera, so it shows the scanner's fallback.
 
 - The iPad install and launch wait on an unlock.
 - The physical devices' keys are not authorized on any host yet. That needs the Device Key screen
