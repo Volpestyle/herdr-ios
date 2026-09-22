@@ -109,8 +109,21 @@ embedded in the app.
    powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
    ```
 
-   The installer puts `%LOCALAPPDATA%\Programs\Herdr\bin` on the user PATH. A new SSH session sees
-   it: `ssh you@host herdr --version`.
+   The installer puts `%LOCALAPPDATA%\Programs\Herdr\bin` on the user PATH. That folder, like
+   `%USERPROFILE%\.herdr\packages\standalone\current`, is a junction to the current
+   `…\standalone\releases\<version>` folder, created at medium integrity.
+
+   - **Standard users:** their SSH sessions run at medium integrity and follow the junction, so
+     nothing more is needed.
+   - **Administrators:** their SSH sessions run elevated (High Mandatory Level). Windows refuses
+     to follow a junction that a medium-integrity process created: "The path cannot be traversed
+     because it contains an untrusted mount point". An admin therefore needs the real
+     `releases\<version>` folder on the user PATH, and must move that entry to the new folder after
+     each `herdr update`. The updater keeps three releases, so a stale entry keeps resolving the
+     older client for two updates and then disappears.
+
+   Check with a new SSH session: `ssh you@host herdr --version` should print the version that
+   `herdr --version` prints on the desktop.
 4. Start the default session from the desktop (open a terminal and run `herdr`, then `ctrl+b q`).
    A herdr server survives the SSH disconnect that started it, but it then lives in the SSH logon
    session: for an administrator that is an elevated token (new panes are titled
@@ -168,7 +181,7 @@ host).
 | --- | --- | --- |
 | `zsh:1: command not found: herdr`, exit 127 | herdr's PATH entry is only in an interactive rc file | Move it to `~/.zprofile` / `~/.bash_profile`, or set the host's remote command to an absolute path |
 | `The term 'herdr' is not recognized…` (Windows) | herdr isn't on the user PATH | Re-run the installer, then reconnect. With a PTY, Windows sshd reports exit status 0 here, so the only sign is the text |
-| Windows PATH points at `…\.herdr\packages\standalone\releases\<version>` | Older installer layout; the entry goes stale after an update removes that folder | Re-run `install.ps1` so PATH uses `%LOCALAPPDATA%\Programs\Herdr\bin` |
+| `ssh you@pc herdr --version` prints an older version than the desktop (admin account) | The user PATH still names the previous `releases\<version>` folder; elevated SSH sessions can't use the `Programs\Herdr\bin` junction | Point the PATH entry at the current `releases\<version>` folder |
 | `Permission denied (publickey)` on Windows | Key in the wrong file for the `Match Group administrators` setting, a UTF-16 file, or loose ACLs | Run `authorize-key.sh`; check the `Match` block in `C:\ProgramData\ssh\sshd_config` |
 | `Permission denied (publickey)` on unix | `~/.ssh` or `authorized_keys` writable by others, or a group-writable home directory | `authorize-key.sh` fixes `~/.ssh` and the file; `chmod go-w ~` |
 | App refuses a changed host key | The host was reinstalled, or the name now points at another machine | Compare the fingerprint with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` (macOS) or `C:\ProgramData\ssh\ssh_host_ed25519_key.pub` (Windows), then remove the pinned key in the app |

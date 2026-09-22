@@ -58,10 +58,21 @@ reviewed both fixes.
    cwd integration never installs. Guard it with `Test-Path variable:global:__HerdrOriginalPrompt`.
    supedupsilly hits this because its profile dot-sources `opencode-private.ps1`, whose first line
    is `Set-StrictMode -Version Latest`.
-2. **supedupsilly:** the user PATH points at
-   `C:\Users\volpe\.herdr\packages\standalone\releases\0.9.0-x86_64-pc-windows-msvc`, not
-   `%LOCALAPPDATA%\Programs\Herdr\bin` (which exists but isn't on PATH). An update that prunes the
-   0.9.0 folder takes herdr off the SSH PATH. Re-running `install.ps1` fixes it. It was left alone
-   because the PC's default session has a live agent.
+2. **herdr upstream: Windows admin SSH PATH doesn't follow updates.** On supedupsilly the user
+   PATH names `C:\Users\volpe\.herdr\packages\standalone\releases\0.9.0-x86_64-pc-windows-msvc`.
+   The installer's `%LOCALAPPDATA%\Programs\Herdr\bin` (not on PATH) is not a shim. It is a
+   junction to that same release folder, like `standalone\current`, created 2026-09-09 by the
+   installer at medium integrity.
+   - volpe's SSH sessions are elevated (`High Mandatory Level`, `IsInRole(Administrator)` True).
+     Windows refuses to let them follow the junction: `[IO.Directory]::GetFiles` throws "The path
+     cannot be traversed because it contains an untrusted mount point", and `Test-Path …\bin\herdr.exe`
+     is False. So prepending it would add a dead entry, not an update-proof one. The user PATH was
+     left unchanged (checked 2026-09-21).
+   - `herdr update` runs the bundled `install.ps1`, which retargets the junctions and keeps three
+     releases (`-Retain 3`). The versioned entry therefore survives two updates, but after the
+     first one SSH runs the old client against the new server.
+   - Upstream fix: give elevated sessions a launcher that isn't a medium-integrity junction, for
+     example a real `herdr.exe` copy or a hardlink in the bin folder. Until then, repoint the PATH
+     entry after each update on the PC.
 3. **transport/app:** Windows PTY sessions report exit status 0 even when the command fails, so
    treat an early channel close as a failure and show the output.
