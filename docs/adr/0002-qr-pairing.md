@@ -92,8 +92,9 @@ forced command validates both (a trailing comment on the key is ignored) and wri
 request to the helper's per-user state directory. It then waits for the helper's decision until
 120 s pass or the pairing expires, whichever comes first. On approval it authorizes the key with
 the comment `herdr-ios:<device name>:<date>` and prints `OK`, exiting 0. Otherwise it prints
-`DENIED` (exit 3), `EXPIRED` (exit 4) or `INVALID` (exit 2, malformed key or name). A second
-enroll for an id that has already been used answers `DENIED`. The last non-empty stdout line is
+`DENIED` (exit 3), `EXPIRED` (exit 4), `INVALID` (exit 2, malformed key or name) or `USED`
+(exit 5, the id was already claimed by another enroll). On `USED` the phone tells the user another
+device took the code, so they can deny that request on the computer and start a new pairing. The last non-empty stdout line is
 the verdict. Exit codes are advisory, because Windows PowerShell reports every non-zero exit as
 1. If the helper is killed outright, the one-time line stays inert until its `expiry-time`.
 
@@ -106,7 +107,12 @@ the entry that connected, `u`, `p`, `os`, session `s`), connect with `DeviceKey`
 
 - **QR leak (photo or shoulder-surf within the TTL).** The attacker also needs a tailnet node
   (`from=`), gets only the forced command, and their device key still needs the human's `y` on
-  the computer, which shows the device name and key fingerprint.
+  the computer. The computer shows the device key's SHA256 fingerprint and the phone shows its own
+  on the review and waiting screens, so the human approves only a matching key. iOS device names
+  read just "iPhone" without the user-assigned-name entitlement, so the name alone proves nothing.
+  If the real phone gets `USED`, someone else claimed the code first. The helper approves only
+  from an interactive terminal outside test mode, and input typed ahead is discarded before the
+  prompt.
 - **Malicious QR.** It can't set a command. Syntax checks alone don't prove a short name
   resolves onto the tailnet, so HerdrKit checks the connected peer address after TCP connect and
   before any SSH auth. It must be in `100.64.0.0/10` or `fd7a:115c:a1e0::/48`. The phone shows
