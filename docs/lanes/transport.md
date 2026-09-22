@@ -1,10 +1,21 @@
 # Lane: transport (w29:p2)
 
-Owned paths: `Packages/HerdrKit/**`, `docs/lanes/transport.md`.
+Owned paths: `Packages/HerdrKit/**` (except `PairingPayload.swift` and `PairingPayloadTests.swift`,
+which belong to w29:p7), `docs/lanes/transport.md`.
 
-Stage: done. `Packages/HerdrKit` is a Swift package (iOS 26, macOS 15) that implements the
-[HerdrKit contract](../plan.md#herdrkit-contract-transport--app). It depends on swift-nio-ssh
-0.15.0 and swift-nio. It does not use Citadel (see [Decisions](#decisions)).
+Stage: done, pairing included. `Packages/HerdrKit` is a Swift package (iOS 26, macOS 15) that
+implements the [HerdrKit contract](../plan.md#herdrkit-contract-transport--app) and
+`Pairing.enroll` for [ADR 0002](../adr/0002-qr-pairing.md). It depends on swift-nio-ssh 0.15.0
+and swift-nio. It does not use Citadel (see [Decisions](#decisions)).
+
+| File | Holds |
+| --- | --- |
+| `SSHTransport.swift` | Shared plumbing: connect with the peer-address gate, host-key validator and auth, session channels with backpressure, output tails, error text |
+| `TerminalSession.swift` | PTY sessions, TOFU, end states |
+| `Pairing.swift` | `Pairing.enroll`, `PairingError` |
+| `Keychain.swift` | Keychain, `DeviceKey`, `HostKeyPins` |
+| `HostProfile.swift`, `HostStore.swift` | Profiles, attach commands, persistence |
+| `PairingPayload.swift` (w29:p7) | The `herdr://pair` parser |
 
 ## API delta vs the contract
 
@@ -43,6 +54,59 @@ Behavior the app relies on:
   and the pin. `Host.ts.net.` and `host.ts.net` share one pin, while `100.x`, the short MagicDNS
   name and the FQDN each get their own, like `known_hosts`.
 
+## Pairing API
+
+```swift
+public enum Pairing {
+    public enum Progress: Sendable, Equatable {
+        case connecting(hostname: String)
+        case waitingForApproval(computer: String)
+    }
+    @MainActor public static func enroll(
+        payload: PairingPayload, deviceName: String,
+        progress: @escaping @MainActor (Progress) -> Void = { _ in }
+    ) async throws(PairingError) -> HostProfile
+}
+
+public enum PairingError: Error, Equatable, Sendable, LocalizedError {
+    case linkExpired                                          // expiresAt passed before enroll started
+    case conflictingPin(hostname: String, port: Int)          // a different pin exists; never replaced
+    case hostKeyMismatch(hostname: String, fingerprint: String) // presented key isn't in the code
+    case unreachable(String)                                  // no name reached SSH; last reason
+    case notOnTailnet(hostname: String, address: String)      // resolved outside the tailnet
+    case pairingKeyRejected                                   // one-time key used, expired or removed
+    case denied(output: String)                               // exit 3
+    case expired(output: String)                              // exit 4
+    case failed(status: Int?, output: String)
+    case cancelled
+}
+```
+
+The caller saves the returned profile (`store.upsert`). It is the payload's `name`, `username`,
+`port`, `platform` and `session`, plus the hostname that connected, with no `remoteCommand`.
+`errorDescription` holds text ready for the UI. Cancelling the task closes the connection
+within about a second, even while the computer is deciding.
+
+How `enroll` runs:
+
+1. It rechecks `expiresAt`, because the confirmation screen can sit open.
+2. It reads the pin for every `hostname:port` in the code. A pin that isn't one of the code's
+   fingerprints fails with `conflictingPin` before any connection. A pin that is in the list
+   becomes the only key accepted for that name.
+3. It tries the names in order, using `SSHTransport.open` with the seed's Ed25519 key and a
+   `PinValidator` over the accepted set (no prompt). A `RemoteAddressGate` checks the connected
+   address before `NIOSSHHandler` starts, so an address outside `100.64.0.0/10` or
+   `fd7a:115c:a1e0::/48` gets no SSH bytes at all. Such a name, like one that never answers,
+   moves on to the next name. `notOnTailnet` is reported if no name pairs. A presented key
+   outside the accepted set stops pairing (`hostKeyMismatch` or `conflictingPin`), and so does
+   a rejected one-time key.
+4. It execs with no PTY (the forced command ignores the command string), writes
+   `ssh-ed25519 <b64>\n<device name>\n`, closes stdin, and reads until exit. The device name is
+   cut to 64 printable code points. Spaces become a plain space; control and format characters
+   are dropped. The phone gives up after 180 s, and the host waits up to 120 s.
+5. Success needs exit 0 and an `OK` line. The pin is add-only. If `pin` returns false and the pin
+   that is there isn't the presented key, enroll fails with `conflictingPin`.
+
 ## Decisions
 
 **NIOSSH directly, not Citadel.** ADR 0001 names Citadel, and I built on Citadel 0.12.1 first.
@@ -66,7 +130,7 @@ answer: generation checks follow every await. Pinning is add-only. If two sessio
 both prompt, the later approval keeps the earlier pin, and its reconnect either matches that pin or
 takes the changed-key refusal. A pin changes only through `forgetHostKey`.
 
-**Backpressure.** The session channel runs with autoRead off. `PTYHandler` collects one read
+**Backpressure.** The session channel runs with autoRead off. `SessionChannelHandler` collects one read
 burst into a single `.output` event, and the MainActor pump requests the next read after
 `onOutput` returns. NIOSSH sends WINDOW_ADJUST only when bytes reach the pipeline, so unread
 output waits in the host's SSH window (`maximumPacketSize` × 64), and at most one burst sits in the
@@ -122,8 +186,8 @@ In `Packages/HerdrKit`:
 
 - `swift build`: clean, no warnings in HerdrKit sources. `xcodebuild -scheme HerdrKit
   -destination 'generic/platform=iOS Simulator' build`: `BUILD SUCCEEDED`.
-- `swift test`: 29 tests in 6 suites pass, and the 9 sshd tests are skipped. Run with no network
-  setup:
+- `swift test`: 49 tests in 10 suites pass, including w29:p7's parser tests, and the 13 sshd
+  tests are skipped. Run with no network setup:
   - Attach strings match host-setup exactly.
   - Invalid names are quoted instead of trapping. The unix attach command goes through real
     `/bin/sh` twice with a fake `herdr`, for 9 hostile names (`$(touch pwned)`, backticks, `;`,
@@ -142,7 +206,18 @@ In `Packages/HerdrKit`:
   - A refused channel open fails the session.
   - A refused TCP connect (`127.0.0.1:1`) fails the session instead of trapping on a leaked promise.
   - A channel open on a connection with no SSH handler completes `ready`.
-- `HERDR_IOS_SSH_TEST=1 swift test`: 29 tests in 6 suites pass, against this Mac's sshd at
+  - Pairing, against the in-process server:
+    - A host key not in the code gives `hostKeyMismatch`, with no auth attempt and no pin.
+    - A conflicting existing pin gives `conflictingPin` with zero TCP connections.
+    - A pin that is in the code is the one used.
+    - Names are tried in order (`.invalid`, then `127.0.0.1`).
+    - Nothing reachable gives `unreachable`.
+    - The real tailnet predicate refuses `127.0.0.1` with `notOnTailnet`, one TCP connection
+      and no auth.
+    - A stale `expiresAt` gives `linkExpired` without connecting.
+    - The tailnet predicate passes 5 addresses and refuses 8. Device names are sanitized. The
+      request is exactly two lines.
+- `HERDR_IOS_SSH_TEST=1 swift test`: 49 tests in 10 suites pass, against this Mac's sshd at
   `127.0.0.1:22` as `james` with the DeviceKey:
   - First use pins a fingerprint that is in `ssh-keyscan 127.0.0.1` | `ssh-keygen -l`.
   - `TERM=xterm-256color` and `stty size` = `24 80`. After `resize(120, 40)` and a sent line, it's
@@ -156,13 +231,24 @@ In `Packages/HerdrKit`:
   - Backpressure: `onOutput` blocks the MainActor for 3 s on the first chunk while the host writes
     64 MB. The writer hasn't finished when the stall ends. All 64 MB then arrive, and no chunk is
     over 16 MB.
+  - Pairing through w29:p7's parser, against the tailnet address `100.103.220.58`. Each test adds
+    a real one-time key line (`restrict`, `expiry-time`, `from=`, `command=` a stand-in for
+    `herdr-pair.py --enroll` that records what it received) and removes exactly that line.
+    - Approved: progress is `connecting` then `waitingForApproval`. The profile is right and has
+      no `remoteCommand`. The pin is one of sshd's non-RSA keys. The helper received the device
+      key and the sanitized name with no TTY, stdin reached EOF, and `SSH_ORIGINAL_COMMAND` was
+      the phone's ignored `herdr-pair`.
+    - Denied (exit 3) and expired (exit 4) give typed errors and leave no pin.
+    - Cancelling while waiting returns `.cancelled` in under 5 s, with no pin.
+    - Comparing `authorized_keys` before and after a run shows no line of mine left behind. (A
+      one-time line from w29:p4's live helper came and went during the run, untouched.)
 - Each of the leak, backpressure and add-only-pin tests fails against a scratch copy with its fix
   removed. Without backpressure, the 64 MB writer finishes during the stall.
 
 ### authorized_keys entry (remove later)
 
-`~/.ssh/authorized_keys` on this Mac didn't exist. It now holds exactly one line (mode 600),
-which the sshd suite uses:
+This line in `~/.ssh/authorized_keys` on this Mac is the transport lane's. The sshd suite uses it.
+Other lines there (device keys) belong to other lanes.
 
 ```
 from="127.0.0.1,::1,100.64.0.0/10" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIERrvlx0U2/xRcgre1YFPaR9v15A/8yd0h9T+UL06j8w herdr-ios-test
@@ -175,6 +261,15 @@ hosts lane's `scripts/authorize-key.sh` doesn't write the `from=` restriction, s
 line by hand.
 
 ## Gaps
+
+- The pairing tests use a stand-in forced command, not `scripts/herdr-pair.py`. The real helper
+  end to end (scan → approve → attach) is plan acceptance item 9, run from the app with
+  `simctl openurl`.
+- Both the pairing tests and w29:p4's helper rewrite `authorized_keys`. Each removes only its
+  own line, re-reading just before the write. A write landing in that microsecond window could
+  still drop the other's line.
+- HerdrKit hasn't paired against Windows. Whether the forced command holds under Windows OpenSSH
+  is the hosts lane's check.
 
 - No HerdrKit test attaches to a live herdr session. An attaching client resizes every pane in
   that session. The hosts lane verified attach, detach, mobile layout and reflow over `ssh -tt`

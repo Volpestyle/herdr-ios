@@ -105,11 +105,11 @@ import Testing
 @Suite struct OutputTailTests {
     @Test func stripsEscapesAndKeepsLastLines() {
         let unix = "\u{1B}[1mline1\u{1B}[0m\r\nline2\r\nzsh:1: command not found: herdr\r\n\r\nlast\r\n"
-        #expect(TerminalSession.lastLines(Array(unix.utf8)) == "line2\nzsh:1: command not found: herdr\nlast")
+        #expect(SSHTransport.lastLines(Array(unix.utf8)) == "line2\nzsh:1: command not found: herdr\nlast")
         // ConPTY: mode switches, clear, OSC title, and cursor positioning instead of newlines.
         let conpty = "\u{1B}[?9001h\u{1B}[?1004h\u{1B}[2J\u{1B}[m\u{1B}[H\u{1B}]0;C:\\Windows\\conhost.exe\u{07}herdr : The term 'herdr' is not recognized\u{1B}[2;1HAt line:1\u{1B}[?25h"
-        #expect(TerminalSession.lastLines(Array(conpty.utf8)) == "herdr : The term 'herdr' is not recognized\nAt line:1")
-        #expect(TerminalSession.lastLines(Array("\u{1B}[?9001h\u{1B}]0;title\u{07}\u{1B}[?25h".utf8)).isEmpty)
+        #expect(SSHTransport.lastLines(Array(conpty.utf8)) == "herdr : The term 'herdr' is not recognized\nAt line:1")
+        #expect(SSHTransport.lastLines(Array("\u{1B}[?9001h\u{1B}]0;title\u{07}\u{1B}[?25h".utf8)).isEmpty)
     }
 }
 
@@ -223,8 +223,8 @@ import Testing
         let ready = tcp.eventLoop.makePromise(of: Void.self)
         let completed = NIOLockedValueBox(false)
         ready.futureResult.whenComplete { _ in completed.withLockedValue { $0 = true } }
-        let (_, sink) = AsyncStream<PTYEvent>.makeStream()
-        await #expect(throws: (any Error).self) { try await TerminalSession.openSessionChannel(on: tcp, ready: ready, events: sink) }
+        let (_, sink) = AsyncStream<SessionEvent>.makeStream()
+        await #expect(throws: (any Error).self) { try await SSHTransport.openSessionChannel(on: tcp, replies: 2, ready: ready, events: sink) }
         #expect(completed.withLockedValue { $0 })
     }
 
@@ -416,9 +416,11 @@ func sshKeygenFingerprint(_ line: String) throws -> String {
 }
 
 /// Every host key fingerprint this Mac's sshd offers, as `ssh-keygen` computes them.
-func sshdFingerprints() throws -> Set<String> {
-    let lines = try run("/usr/bin/ssh-keyscan", ["-p", "22", "127.0.0.1"]).split(separator: "\n").filter { !$0.hasPrefix("#") }
-    return Set(try lines.map { try sshKeygenFingerprint($0.split(separator: " ").dropFirst().joined(separator: " ")) })
+func sshdFingerprints(excludingRSA: Bool = false) throws -> Set<String> {
+    let keys = try run("/usr/bin/ssh-keyscan", ["-p", "22", "127.0.0.1"]).split(separator: "\n").filter { !$0.hasPrefix("#") }
+        .map { $0.split(separator: " ").dropFirst().joined(separator: " ") }
+        .filter { !excludingRSA || !$0.hasPrefix("ssh-rsa ") }
+    return Set(try keys.map(sshKeygenFingerprint))
 }
 
 final class TestSSHServer: Sendable {
@@ -426,14 +428,18 @@ final class TestSSHServer: Sendable {
     let fingerprint: String
     private let channel: Channel
     private let auth: TestAuth
+    private let accepted: NIOLockedValueBox<Int>
 
     var authAttempts: Int { auth.attempts.withLockedValue { $0 } }
+    /// TCP connections accepted, whether or not they spoke SSH.
+    var connections: Int { accepted.withLockedValue { $0 } }
 
-    private init(port: Int, fingerprint: String, channel: Channel, auth: TestAuth) {
+    private init(port: Int, fingerprint: String, channel: Channel, auth: TestAuth, accepted: NIOLockedValueBox<Int>) {
         self.port = port
         self.fingerprint = fingerprint
         self.channel = channel
         self.auth = auth
+        self.accepted = accepted
     }
 
     /// `acceptLogins` lets any key in but refuses every channel open.
@@ -441,9 +447,11 @@ final class TestSSHServer: Sendable {
         let key = Curve25519.Signing.PrivateKey()
         let hostKey = NIOSSHPrivateKey(ed25519Key: key)
         let auth = TestAuth(accept: acceptLogins)
+        let accepted = NIOLockedValueBox(0)
         let channel = try await ServerBootstrap(group: MultiThreadedEventLoopGroup.singleton)
             .childChannelInitializer { child in
-                child.eventLoop.makeCompletedFuture {
+                accepted.withLockedValue { $0 += 1 }
+                return child.eventLoop.makeCompletedFuture {
                     let config = SSHServerConfiguration(hostKeys: [hostKey], userAuthDelegate: auth)
                     try child.pipeline.syncOperations.addHandler(
                         NIOSSHHandler(role: .server(config), allocator: child.allocator) { channel, _ in
@@ -453,7 +461,9 @@ final class TestSSHServer: Sendable {
             }
             .bind(host: "127.0.0.1", port: 0).get()
         let line = "ssh-ed25519 " + DeviceKey.wireBlob(key.publicKey).base64EncodedString()
-        return TestSSHServer(port: channel.localAddress!.port!, fingerprint: try sshKeygenFingerprint(line), channel: channel, auth: auth)
+        return TestSSHServer(
+            port: channel.localAddress!.port!, fingerprint: try sshKeygenFingerprint(line), channel: channel, auth: auth,
+            accepted: accepted)
     }
 
     func stop() {

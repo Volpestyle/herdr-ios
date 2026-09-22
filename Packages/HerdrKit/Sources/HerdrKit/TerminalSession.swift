@@ -1,8 +1,5 @@
-import CryptoKit
 import Foundation
-import NIOConcurrencyHelpers
 import NIOCore
-import NIOPosix
 @preconcurrency import NIOSSH
 import Observation
 
@@ -74,7 +71,7 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
         } catch {
             guard isCurrent(generation) else { return }
             connection?.close(promise: nil)
-            state = .failed(Self.describe(error))
+            state = .failed(SSHTransport.describe(error))
         }
     }
 
@@ -111,9 +108,9 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
             username: profile.username, key: try DeviceKey.privateKey(), password: store.password(for: profile.id))
         while true {
             let pinned = try HostKeyPins.fingerprint(hostname: host, port: port)
-            let validator = PinValidator(pinned: pinned)
+            let validator = PinValidator(accepted: pinned.map { [$0] } ?? [])
             do {
-                return try await Self.open(host: host, port: port, credentials: credentials, validator: validator)
+                return try await SSHTransport.open(host: host, port: port, credentials: credentials, validator: validator)
             } catch {
                 guard isCurrent(generation) else { throw CancellationError() }
                 // Decide from what the host presented, not from how the failure surfaced.
@@ -135,45 +132,11 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
         }
     }
 
-    private nonisolated static func open(
-        host: String, port: Int, credentials: Credentials, validator: PinValidator
-    ) async throws -> Channel {
-        let loop = MultiThreadedEventLoopGroup.singleton.next()
-        let authenticated = loop.makePromise(of: Void.self)
-        let bootstrap = ClientBootstrap(group: loop)
-            .connectTimeout(.seconds(15))
-            .channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value: 1)
-            .channelInitializer { channel in
-                channel.eventLoop.makeCompletedFuture {
-                    let config = SSHClientConfiguration(userAuthDelegate: OfferQueue(credentials), serverAuthDelegate: validator)
-                    try channel.pipeline.syncOperations.addHandlers(
-                        NIOSSHHandler(role: .client(config), allocator: channel.allocator, inboundChildChannelInitializer: nil),
-                        AuthWaiter(authenticated))
-                }
-            }
-        let tcp: Channel
-        do {
-            tcp = try await bootstrap.connect(host: host, port: port).get()
-        } catch {
-            authenticated.fail(error)  // NIO traps on an unfulfilled promise in debug builds
-            throw error
-        }
-        let timeout = loop.scheduleTask(in: .seconds(20)) { authenticated.fail(ChannelError.connectTimeout(.seconds(20))) }
-        do {
-            try await authenticated.futureResult.get()
-            timeout.cancel()
-            return tcp
-        } catch {
-            tcp.close(promise: nil)
-            throw error
-        }
-    }
-
     /// Opens a session channel, requests the PTY, and execs the attach command.
     private func openPTY(on connection: Channel, command: String, cols: Int, rows: Int, generation: Int) async throws {
-        let (events, sink) = AsyncStream<PTYEvent>.makeStream()
+        let (events, sink) = AsyncStream<SessionEvent>.makeStream()
         let ready = connection.eventLoop.makePromise(of: Void.self)
-        let pty = try await Self.openSessionChannel(on: connection, ready: ready, events: sink)
+        let pty = try await SSHTransport.openSessionChannel(on: connection, replies: 2, ready: ready, events: sink)
         guard isCurrent(generation) else { throw CancellationError() }
         self.pty = pty
         Task { [weak self] in
@@ -193,32 +156,7 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
         }
     }
 
-    /// Opens a session channel carrying a `PTYHandler`. `ready` is completed on every path, including
-    /// a `createChannel` that fails before the initializer runs (connection gone after auth).
-    nonisolated static func openSessionChannel(
-        on connection: Channel, ready: EventLoopPromise<Void>, events sink: AsyncStream<PTYEvent>.Continuation
-    ) async throws -> Channel {
-        try await connection.eventLoop.flatSubmit {
-            let created = connection.eventLoop.makePromise(of: Channel.self)
-            created.futureResult.whenFailure { ready.fail($0) }
-            do {
-                let ssh = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
-                ssh.createChannel(created, channelType: .session) { child, _ in
-                    child.eventLoop.makeCompletedFuture {
-                        // Backpressure: read only when the MainActor has taken the last chunk, so unread
-                        // output waits in the host's SSH window instead of app memory.
-                        try child.syncOptions?.setOption(ChannelOptions.autoRead, value: false)
-                        try child.pipeline.syncOperations.addHandler(PTYHandler(ready: ready, events: sink))
-                    }
-                }
-            } catch {
-                created.fail(error)
-            }
-            return created.futureResult
-        }.get()
-    }
-
-    private func handle(_ event: PTYEvent, generation: Int) {
+    private func handle(_ event: SessionEvent, generation: Int) {
         guard isCurrent(generation) else { return }
         switch event {
         case .output(let bytes):
@@ -243,7 +181,7 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
             case nil: lastError ?? "The connection closed."
             }
             if let reason {
-                let tail = Self.lastLines(recentOutput)
+                let tail = SSHTransport.lastLines(recentOutput)
                 state = .failed(tail.isEmpty ? reason : reason + "\n" + tail)
             } else {
                 state = .closed
@@ -251,192 +189,4 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
         }
     }
 
-    /// The last few readable lines of terminal output, without escape sequences.
-    nonisolated static func lastLines(_ bytes: [UInt8], count: Int = 3) -> String {
-        String(decoding: bytes, as: UTF8.self)
-            .replacing(#/\x{1B}\[[0-9;]*[Hf]/#, with: "\n")  // cursor moves stand in for line breaks
-            .replacing(#/\x{1B}(\[[0-?]*[ -\/]*[@-~]|\][^\x{07}\x{1B}]*(\x{07}|\x{1B}\\)?|.)/#, with: "")
-            .split(whereSeparator: \.isNewline)
-            .map { $0.filter { $0.asciiValue.map { $0 >= 0x20 && $0 != 0x7F } ?? true }.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .suffix(count)
-            .joined(separator: "\n")
-    }
-
-    private nonisolated static func describe(_ error: Error) -> String {
-        if let error = error as? SessionError { return error.description }
-        if error is NIOConnectionError || error is IOError || error is ChannelError {
-            return "Could not reach the host: \(error)"
-        }
-        return "\(error)"
-    }
-}
-
-enum SessionError: Error, CustomStringConvertible {
-    case hostKeyChanged(host: String, port: Int, presented: String, pinned: String)
-    case hostKeyNotTrusted
-    case invalidSessionName(String)
-    case authenticationFailed
-    case requestRefused
-
-    var description: String {
-        switch self {
-        case let .hostKeyChanged(host, port, presented, pinned):
-            "The host key for \(host):\(port) changed (now \(presented), pinned \(pinned)). The connection was refused."
-        case .hostKeyNotTrusted: "The host key was not trusted."
-        case .invalidSessionName(let problem): "Invalid herdr session name: \(problem)."
-        case .authenticationFailed:
-            "Authentication failed. Add this device's key to the host's authorized_keys or save a password."
-        case .requestRefused: "The host refused the terminal or the command."
-        }
-    }
-}
-
-/// Accepts only the pinned fingerprint and records what the host presented.
-/// With no pin it always refuses, so credentials never reach an unconfirmed host.
-final class PinValidator: NIOSSHClientServerAuthenticationDelegate, Sendable {
-    let pinned: String?
-    let presented = NIOLockedValueBox<String?>(nil)
-
-    init(pinned: String?) { self.pinned = pinned }
-
-    func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
-        let fingerprint = HostKeyPins.fingerprintSHA256(hostKey)
-        presented.withLockedValue { $0 = fingerprint }
-        if let pinned, pinned == fingerprint {
-            validationCompletePromise.succeed(())
-        } else {
-            validationCompletePromise.fail(SessionError.hostKeyNotTrusted)
-        }
-    }
-}
-
-struct Credentials: Sendable {
-    let username: String
-    let key: Curve25519.Signing.PrivateKey
-    let password: String?
-}
-
-/// Offers the device key, then the saved password, skipping methods the server doesn't allow.
-final class OfferQueue: NIOSSHClientUserAuthenticationDelegate {
-    private var offers: [NIOSSHUserAuthenticationOffer]
-
-    init(_ credentials: Credentials) {
-        let user = credentials.username
-        offers = [.init(username: user, serviceName: "", offer: .privateKey(.init(privateKey: .init(ed25519Key: credentials.key))))]
-        if let password = credentials.password {
-            offers.append(.init(username: user, serviceName: "", offer: .password(.init(password: password))))
-        }
-    }
-
-    func nextAuthenticationType(
-        availableMethods: NIOSSHAvailableUserAuthenticationMethods,
-        nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
-    ) {
-        while !offers.isEmpty {
-            let offer = offers.removeFirst()
-            switch offer.offer {
-            case .privateKey where availableMethods.contains(.publicKey),
-                 .password where availableMethods.contains(.password):
-                return nextChallengePromise.succeed(offer)
-            default: continue
-            }
-        }
-        nextChallengePromise.fail(SessionError.authenticationFailed)
-    }
-}
-
-/// Completes once user auth succeeds; fails on the first error (host key refusal, auth failure) or EOF.
-final class AuthWaiter: ChannelInboundHandler {
-    typealias InboundIn = Any
-    private let authenticated: EventLoopPromise<Void>
-
-    init(_ authenticated: EventLoopPromise<Void>) { self.authenticated = authenticated }
-
-    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
-        if event is UserAuthSuccessEvent { authenticated.succeed(()) }
-        context.fireUserInboundEventTriggered(event)
-    }
-
-    func errorCaught(context: ChannelHandlerContext, error: Error) {
-        authenticated.fail(error)
-        context.close(promise: nil)
-    }
-
-    func channelInactive(context: ChannelHandlerContext) {
-        authenticated.fail(ChannelError.eof)
-        context.fireChannelInactive()
-    }
-}
-
-enum PTYEvent: Sendable { case output([UInt8]), exitStatus(Int), error(String), closed }
-
-/// Session-channel handler: forwards stdout/stderr and lifecycle into an ordered stream, and
-/// completes `ready` once the PTY and exec requests are both accepted.
-///
-/// The channel runs with autoRead off. Each read burst becomes one `.output` event, and the
-/// consumer requests the next read, so at most one burst (at most one SSH window) sits in memory.
-final class PTYHandler: ChannelInboundHandler {
-    typealias InboundIn = SSHChannelData
-
-    private let ready: EventLoopPromise<Void>
-    private let events: AsyncStream<PTYEvent>.Continuation
-    private var pendingReplies = 2  // pty-req, exec
-    private var burst: [UInt8] = []
-
-    init(ready: EventLoopPromise<Void>, events: AsyncStream<PTYEvent>.Continuation) {
-        self.ready = ready
-        self.events = events
-    }
-
-    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        let data = unwrapInboundIn(data)
-        guard case .byteBuffer(let buffer) = data.data, data.type == .channel || data.type == .stdErr else { return }
-        burst.append(contentsOf: buffer.readableBytesView)
-    }
-
-    func channelReadComplete(context: ChannelHandlerContext) {
-        if burst.isEmpty {
-            context.read()  // nothing for the consumer to take, so it won't ask; keep reading
-        } else {
-            events.yield(.output(burst))
-            burst = []
-        }
-        context.fireChannelReadComplete()
-    }
-
-    func channelActive(context: ChannelHandlerContext) {
-        context.read()
-        context.fireChannelActive()
-    }
-
-    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
-        switch event {
-        case is ChannelSuccessEvent:
-            pendingReplies -= 1
-            if pendingReplies == 0 { ready.succeed(()) }
-        case is ChannelFailureEvent:
-            events.yield(.error(SessionError.requestRefused.description))
-            ready.fail(SessionError.requestRefused)
-            context.close(promise: nil)
-        case let status as SSHChannelRequestEvent.ExitStatus:
-            events.yield(.exitStatus(status.exitStatus))
-        default:
-            context.fireUserInboundEventTriggered(event)
-        }
-    }
-
-    func errorCaught(context: ChannelHandlerContext, error: Error) {
-        events.yield(.error("\(error)"))
-        ready.fail(error)
-        context.close(promise: nil)
-    }
-
-    func channelInactive(context: ChannelHandlerContext) {
-        if !burst.isEmpty { events.yield(.output(burst)) }
-        ready.fail(ChannelError.eof)
-        events.yield(.closed)
-        events.finish()
-        context.fireChannelInactive()
-    }
 }
