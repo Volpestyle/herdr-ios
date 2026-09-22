@@ -146,6 +146,7 @@ needs no copying or typing on the phone. The protocol is [ADR 0002](adr/0002-qr-
    `python3 herdr-pair.py [--session NAME]` (`python` on Windows). It refuses to run without a
    terminal on stdin, because approving a device needs a person at the keyboard. It prints a
    black-on-white QR code, about 73×37 cells, and the host-key fingerprint.
+
    To pair a Windows PC from a Mac, run the PC's copy over SSH, here installed in
    `%USERPROFILE%\herdr-ios`: `ssh -t volpe@supedupsilly 'python herdr-ios\herdr-pair.py'`. The
    single quotes keep the backslash from the Mac's shell. The QR code and the approval prompt both
