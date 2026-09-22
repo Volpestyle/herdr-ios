@@ -9,8 +9,9 @@ command hands over the phone's device key, and you approve it here. The one-time
 on every exit path; sshd's expiry-time is the backstop if this process dies.
 
 Stdlib only, Python 3.9+, macOS and Windows. Keep qrcodegen.py next to this file.
-Test-only flags (need HERDR_PAIR_TEST=1): --print-url, --state, --keys-file, --ttl.
-Non-interactive runs answer the prompt from stdin, e.g. `echo y | ... --print-url`.
+Approval needs a person at a terminal: stdin must be a TTY, and anything typed before the prompt
+is discarded. Test-only (need HERDR_PAIR_TEST=1): --print-url, --state, --keys-file, --ttl, and
+answering the prompt from a pipe (`echo y | ... --print-url`) for unattended end-to-end runs.
 """
 import argparse
 import base64
@@ -40,7 +41,7 @@ SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 HOST_RE = re.compile(r"^[A-Za-z0-9.:-]{1,253}$")
 ED25519_PREFIX = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20"
 HOST_KEY_TYPES = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521")
-OUTCOMES = {0: "OK", 2: "INVALID", 3: "DENIED", 4: "EXPIRED"}
+OUTCOMES = {0: "OK", 2: "INVALID", 3: "DENIED", 4: "EXPIRED", 5: "USED"}
 
 
 def die(message):
@@ -286,7 +287,7 @@ def enroll(pair_id, state):
     fp = fingerprint(blob)
     request = {"key": "ssh-ed25519 " + base64.b64encode(blob).decode(), "name": name, "t": time.time()}
     if not create_once(path("claim"), json.dumps(request)):
-        finish(3)  # the id is single use
+        finish(5)  # single use: another enroll claimed this id, and that's what the computer prompts for
 
     try:
         give_up = min(time.time() + DECISION_WAIT, offer["expires"])
@@ -327,6 +328,19 @@ def ask(prompt, timeout):
     if not answer:
         print()
     return answer[0] if answer else None
+
+
+def discard_typeahead():
+    """Drop keys pressed before the prompt, so a stray `y` can't approve a device unseen."""
+    if not sys.stdin.isatty():
+        return
+    if WINDOWS:
+        import msvcrt
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+    else:
+        import termios
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
 
 
 def render_qr(text):
@@ -434,6 +448,7 @@ def await_enrollment(path, expires, keys):
     blob = ed25519_blob(request["key"])
     fp = fingerprint(blob)
     print(f"\nPairing request from {request['name']!r}\n  device key {fp}")
+    discard_typeahead()
     answer = ask("Approve this device? [y/N] ", request["t"] + DECISION_WAIT - 5 - time.time())
     if answer is None:
         create_once(path("decision"), "expired")
@@ -476,8 +491,11 @@ def main():
         if not args.state:
             finish(2)
         enroll(args.enroll, args.state)
-    if (args.print_url or args.state or args.keys_file or args.ttl != TTL) and os.environ.get("HERDR_PAIR_TEST") != "1":
+    testing = os.environ.get("HERDR_PAIR_TEST") == "1"
+    if (args.print_url or args.state or args.keys_file or args.ttl != TTL) and not testing:
         die("--print-url, --state, --keys-file and --ttl are test-only (set HERDR_PAIR_TEST=1)")
+    if not testing and not sys.stdin.isatty():
+        die("run this in a terminal: approving a device needs a person at the keyboard")
     if args.session and not SESSION_RE.match(args.session):
         die("session names are 1-64 of A-Z a-z 0-9 . _ -")
     if args.host and not all(HOST_RE.match(h) for h in args.host):

@@ -194,7 +194,7 @@ def local_checks(port, phone_a, phone_b):
     while not os.path.exists(os.path.join(h.state, h.id + ".claim")):
         time.sleep(0.05)
     out, code = enroll_direct(h, phone_a, "Second")
-    check((out, code) == (["DENIED"], 3), "claim-once: a second enroll for the id is refused")
+    check((out, code) == (["USED"], 5), "claim-once: a second enroll for the id gets USED, exit 5")
     h.answer("y")
     check(first.stdout.read().strip() == "OK" and first.wait() == 0 and h.wait() == 0, "claim-once: the first enroll completes")
     check(text(keys).count(phone_b.split()[1]) == 1 and "herdr-ios:First:" in text(keys) and "Second" not in text(keys),
@@ -236,6 +236,13 @@ def local_checks(port, phone_a, phone_b):
     out, code = enroll_direct(h, phone_a, "Again")
     check((out, code) == (["OK"], 0) and h.wait() == 0, "a valid enroll after invalid ones still pairs")
 
+    r = subprocess.run([sys.executable, HELPER, "--port", "1"], stdin=subprocess.PIPE, capture_output=True,
+                       text=True, env={k: v for k, v in os.environ.items() if k != "HERDR_PAIR_TEST"}, timeout=30)
+    check(r.returncode == 1 and "run this in a terminal" in r.stderr,
+          "outside HERDR_PAIR_TEST, a piped stdin is refused before anything is written")
+    if not WINDOWS:
+        typeahead_check(port, keys)
+
     h = Helper(port, keys)
     while f"herdr-pair:{h.id}" not in text(keys):
         time.sleep(0.05)
@@ -249,6 +256,32 @@ def local_checks(port, phone_a, phone_b):
             time.sleep(0.05)
         h.proc.terminate()
         check(h.wait() == 143 and f"herdr-pair:{h.id}" not in text(keys), "SIGTERM: one-time line removed (exit 143)")
+
+
+def typeahead_check(port, keys):
+    """A `y` typed while the QR code is up is discarded; only an answer to the prompt counts."""
+    import pty
+    master, slave = pty.openpty()
+    state = tempfile.mkdtemp(dir=TMP)
+    proc = subprocess.Popen([sys.executable, HELPER, "--print-url", "--host", "127.0.0.1", "--port", str(port),
+                             "--state", state, "--keys-file", keys], stdin=slave, stdout=subprocess.PIPE, text=True,
+                            env={**os.environ, "HERDR_PAIR_TEST": "1"})
+    os.close(slave)
+    url = proc.stdout.readline().strip()
+    pair_id = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["id"][0]
+    os.write(master, b"y\n")  # typed ahead, before any request exists
+    enroll = subprocess.Popen([sys.executable, HELPER, f"--enroll={pair_id}", f"--state={state}"],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    enroll.stdin.write(f"{keygen('typeahead')[1]}\nTypeahead\n")
+    enroll.stdin.close()
+    seen = ""
+    while "Approve this device?" not in seen:
+        seen += proc.stdout.read(1)
+    time.sleep(0.5)
+    os.write(master, b"n\n")
+    check(enroll.stdout.read().strip() == "DENIED" and proc.wait(timeout=60) == 3,
+          "a y typed before the prompt is discarded; the answer to the prompt decides")
+    os.close(master)
 
 
 def ssh_checks(label, port, target, start_helper, keys_text, remove_blob):

@@ -143,19 +143,23 @@ needs no copying or typing on the phone. The protocol is [ADR 0002](adr/0002-qr-
    the computer. They need Python 3.9 or newer: `/usr/bin/python3` on macOS, the python.org
    build on Windows. `ssh-keygen` and `ssh-keyscan` come with OpenSSH on both.
 2. In a terminal logged in as the account the phone should use, run
-   `python3 herdr-pair.py [--session NAME]` (`python` on Windows). It prints a black-on-white QR
-   code, about 73×37 cells, and the host-key fingerprint.
+   `python3 herdr-pair.py [--session NAME]` (`python` on Windows). It refuses to run without a
+   terminal on stdin, because approving a device needs a person at the keyboard. It prints a
+   black-on-white QR code, about 73×37 cells, and the host-key fingerprint.
 3. Scan it with the Herdr app, or with the Camera app, which opens `herdr://pair?…`. The phone
    shows the computer and account.
 4. The computer asks:
 
    ```
-   Pairing request from 'James's iPhone'
+   Pairing request from 'iPhone'
      device key SHA256:…
    Approve this device? [y/N]
    ```
 
-   `y` authorizes that exact key as `ssh-ed25519 … herdr-ios:<name>:<date>`. The phone pins the
+   iOS reports only the model ("iPhone", "iPad") as the device name, so the fingerprint is what
+   identifies the phone. Anything typed before the prompt appears is discarded, so only an answer
+   given after reading it counts. `y` authorizes that exact key as
+   `ssh-ed25519 … herdr-ios:<name>:<date>`. The phone pins the
    host key from the QR code (no TOFU prompt), saves the host and attaches.
 
 What the helper does:
@@ -178,7 +182,7 @@ What the helper does:
   the SSH session that started the helper drops. To clean up early, delete lines ending in
   `herdr-pair:<id>`.
 - The pairing id is single use. The first enroll claims it with an exclusive create, and any
-  later enroll for that id is refused. The approval is bound to the key shown in the prompt. The
+  later enroll for that id gets `USED`. The approval is bound to the key shown in the prompt. The
   deadline is checked again at approval and before the key is written, so a late `y` authorizes
   nothing.
 - Handoff files live in `~/.herdr-pair/` (macOS) or `%LOCALAPPDATA%\herdr-pair` (Windows), and
@@ -189,22 +193,24 @@ The enroll command answers the phone with one token on stdout:
 | Token | Exit | Meaning |
 | --- | --- | --- |
 | `OK` | 0 | Approved; the device key is authorized |
-| `DENIED` | 3 | Denied at the prompt, or the id was already used |
+| `DENIED` | 3 | Denied at the prompt |
 | `EXPIRED` | 4 | The 10-minute code or the 120 s approval window passed, or the answer came after the deadline |
 | `INVALID` | 2 | The key isn't a bare `ssh-ed25519`, or the device name is empty, longer than 64 characters, or has control characters |
+| `USED` | 5 | Another enroll already claimed this code; the prompt on the computer is for that device, so deny it |
 
-When the Windows default shell is PowerShell, sshd reports 3 and 4 as exit 1, so the token is
-what counts.
+When the Windows default shell is PowerShell, sshd reports 3, 4 and 5 as exit 1, so the token
+is what counts.
 
 Checks: `python3 scripts/herdr-pair.test.py` covers URL escaping, approve, claim-once,
-deny, expiry, a late approval, invalid input and signal cleanup. It uses a temp keys file, plus a
+deny, expiry, a late approval, invalid input, the terminal requirement, discarded typeahead and
+signal cleanup. It uses a temp keys file, plus a
 private loopback sshd on macOS for the forced-command probes. Adding
 `--remote-windows volpe@supedupsilly 'C:\Users\volpe\herdr-pair-test'` runs the same probes
 against the PC's real sshd from the Mac. The Windows ssh client hangs on exit when it runs without
 a console, so the probes can't run on the PC itself. For an unattended end-to-end run, set
 `HERDR_PAIR_TEST=1` and pass `--print-url`, which prints the URL instead of the QR code, and
-answer the prompt on stdin (`echo y | …`). `--print-url`, `--state`, `--keys-file` and `--ttl`
-are refused without that variable.
+answer the prompt from a pipe (`echo y | …`). Without that variable, `--print-url`, `--state`,
+`--keys-file`, `--ttl` and a piped stdin are all refused.
 
 ## Authorize the device key by hand
 

@@ -62,10 +62,11 @@ Stage: done. `scripts/herdr-pair.py` (stdlib, Python 3.9+) plus vendored Nayuki 
 Evidence, 2026-09-21:
 
 - `python3 scripts/herdr-pair.test.py --remote-windows volpe@supedupsilly 'C:\Users\volpe\herdr-pair-test'`
-  on this Mac, with `/usr/bin/python3` 3.9: all 40 checks pass.
-  - The local set covers RFC 3986 URL escaping, approve, claim-once bound to the claiming key,
-    deny, expiry, a late approval (EXPIRED, no key), a foreground deadline re-check, invalid
-    input, and SIGINT/SIGTERM cleanup.
+  on this Mac, with `/usr/bin/python3` 3.9: all 42 checks pass (after the review fixes below).
+  - The local set covers RFC 3986 URL escaping, approve, claim-once (a second enroll gets `USED`)
+    bound to the claiming key, deny, expiry, a late approval (EXPIRED, no key), a foreground
+    deadline re-check, and invalid input. It also covers refusing a piped stdin outside test mode,
+    discarding a `y` typed before the prompt (pty), and SIGINT/SIGTERM cleanup.
   - The same probes run against a private loopback sshd and against supedupsilly's real sshd
     over the tailnet (Windows PowerShell default shell). The one-time key rebuilt from the QR
     seed gets `INVALID` for `exec whoami`; `-t` gives "PTY allocation request failed"; the sftp
@@ -73,7 +74,8 @@ Evidence, 2026-09-21:
     Enroll then prints `OK`, the enrolled key logs in, the one-time key is rejected afterwards,
     and a denial leaves no key.
   - Both PC key files end byte-for-byte as they started.
-- On the PC itself (Python 3.11), the local set passes too (Windows exit for Ctrl+Break: 149).
+- On the PC itself (Python 3.11), the local set passes too (21 checks; the pty and SIGTERM ones
+  are unix-only; Windows exit for Ctrl+Break: 149).
 - Mutation checks: making the claim non-exclusive, dropping the deadline re-check, and dropping
   the cleanup in `finally` each fail the suite.
 - The QR renderer's half-block output, turned back into modules and decoded with CoreImage,
@@ -88,13 +90,21 @@ but 2 CRLFs became LF. I restored it byte-for-byte from the 2026-09-16 shadow co
 `95A5B128…FEE6A`, ACL unchanged). The cleanup now touches only files that contain the test key
 and keeps their line endings. The helper itself only ever wrote the per-user file.
 
-Protocol notes for the lead (ADR 0002 as implemented):
+Review (w29:p5): accept-with-fixes, both fixed.
 
-1. Outcome `INVALID` (exit 2) covers a malformed key or name; the ADR lists only OK, DENIED and
-   EXPIRED. A second enroll for a used id answers `DENIED`. The enroll's approval wait ends at
+- A second enroll for a claimed id now answers `USED` (exit 5) instead of `DENIED`. That lets
+  the phone tell a leaked-code race apart from a human "no". The lead signed off in ADR 0002,
+  and HerdrKit maps it (25ea9ad).
+- Approval needs a TTY on stdin outside `HERDR_PAIR_TEST`, and typed-ahead input is flushed
+  before the prompt (`tcflush` on unix, an `msvcrt` drain on Windows). A scripted `echo y |` or
+  a stray keypress can no longer approve an unseen device.
+
+Protocol notes (ADR 0002 as implemented):
+
+1. Outcome `INVALID` (exit 2) covers a malformed key or name. The enroll's approval wait ends at
    the earlier of 120 s and the code's expiry.
 2. The enroll accepts `ssh-ed25519 <b64>` with a trailing comment and ignores the comment.
-3. Under Windows' PowerShell default shell, sshd reports exits 3 and 4 as 1. HerdrKit decides on
+3. Under Windows' PowerShell default shell, sshd reports exits 3, 4 and 5 as 1. HerdrKit decides on
    the token (transport, 88180ed).
 4. If the helper is killed outright (SIGKILL, or the Windows SSH session that launched it
    dropping), the restricted line stays until its `expiry-time`. That's the documented backstop.
