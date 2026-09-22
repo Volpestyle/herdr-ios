@@ -146,6 +146,12 @@ needs no copying or typing on the phone. The protocol is [ADR 0002](adr/0002-qr-
    `python3 herdr-pair.py [--session NAME]` (`python` on Windows). It refuses to run without a
    terminal on stdin, because approving a device needs a person at the keyboard. It prints a
    black-on-white QR code, about 73×37 cells, and the host-key fingerprint.
+   To pair a Windows PC from a Mac, run the PC's copy over SSH, here installed in
+   `%USERPROFILE%\herdr-ios`: `ssh -t volpe@supedupsilly 'python herdr-ios\herdr-pair.py'`. The
+   single quotes keep the backslash from the Mac's shell. The QR code and the approval prompt both
+   come through the SSH terminal, which must be at least about 75 columns wide or ConPTY wraps the
+   code. Keep the session open until the helper exits. If it drops, Windows ends the helper before
+   its cleanup, and the one-time key stays until its expiry-time.
 3. Scan it with the Herdr app, or with the Camera app, which opens `herdr://pair?…`. The phone
    shows the computer and account.
 4. The computer asks:
