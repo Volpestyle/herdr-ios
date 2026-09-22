@@ -331,6 +331,7 @@ def ask(prompt, timeout):
 
 def render_qr(text):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    sys.dont_write_bytecode = True  # no __pycache__ next to a copied script
     import qrcodegen
     qr = qrcodegen.QrCode.encode_text(text, qrcodegen.QrCode.Ecc.LOW)
     quiet, size = 4, qr.get_size()

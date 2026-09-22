@@ -28,6 +28,7 @@ import tempfile
 import time
 import urllib.parse
 
+sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(HERE, "herdr-pair.py")
 WINDOWS = sys.platform == "win32"
