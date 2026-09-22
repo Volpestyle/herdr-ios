@@ -31,10 +31,17 @@ running on the physical iPhone. The iPad install waits on the iPad being unlocke
   **Scan Computer** scanner (VisionKit `DataScannerViewController`, QR only). The scanner ignores
   any other code. Where there is no camera (Simulator, unsupported hardware) the scanner falls back
   to text pointing at the Camera app and manual entry. The review sheet shows the computer name,
-  account, address, platform, session and the code's host-key fingerprints. **Pair** runs
-  `Pairing.enroll`, shows "Connecting to …" and then "Waiting for approval on …", then saves the
-  returned host and opens its terminal. Re-pairing the same account updates that host instead of
-  adding a twin. Every failure says what to do next. The device name is `UIDevice.current.name`.
+  account, platform, session, *every* address in the code in the order enroll tries them (it saves
+  whichever answers), and the code's host-key fingerprints. It also shows this device's name and
+  key fingerprint (`DeviceKey.fingerprintSHA256()`, the same `SHA256:` string the helper prints
+  in its approval prompt). **Pair** sits in a bar pinned under the list. It runs
+  `Pairing.enroll`, which shows "Connecting to …", then "Waiting for approval on …" with "Approve
+  only if <computer> shows this device's key: SHA256:…". It then saves the returned host and opens
+  its terminal. On iPad the sheet uses page sizing, so everything fits without scrolling. Re-pairing the same account updates that host instead of
+  adding a twin. Every failure says what to do next, including `.used` ("Another device already
+  used this code. Deny its request on the computer, then pair again."). The device name is
+  `UIDevice.current.name`. Without the user-assigned-device-name entitlement a physical device
+  sends just "iPhone" or "iPad", so the key fingerprint is what the user checks.
   "Pair a Computer" is the primary empty-state action and a toolbar button. Manual add stays.
 - `App/TerminalScreen.swift`: the terminal, a status overlay (connecting, reconnecting, failed
   with the multi-line reason, session ended), and the host-key sheet.
@@ -179,6 +186,21 @@ The helper takes its name and addresses from Tailscale (`SupedUpSilly`,
 Afterwards the paired keys were removed from both hosts, and `herdr-ios-test` was deleted on both.
 Each `authorized_keys` is back to its lines from before this lane.
 
+**Device-key check and a code used twice** (after the w29:p5 review):
+
+- The fingerprint each simulator displayed while waiting (saved by the test from the screen)
+  equals the one the helper printed in its approval prompt, byte for byte. iPhone:
+  `SHA256:OSWJon4xFHOO1GErXmFrpRdz7ttZiEnQRH40KxMFWsE`. iPad:
+  `SHA256:3f+SgL2yD1m88p2Honi5f34+yBGjFHwwFi+V5/klzes`. Screens: `pair-mac-iphone-review.png`
+  and `-waiting.png`, `pair-mac-ipad-waiting.png`.
+- One code was opened on both simulators. The iPad claimed it and waited at the helper's prompt.
+  The iPhone's Pair then failed with "Another device already used this code. Deny its request on
+  the computer, then pair again." (`pair-used-iphone-failed.png`). Approving the iPad paired it
+  (`pair-used-ipad-connected.png`), and no one-time line was left.
+
+The Windows pairing screenshots below predate the device-key panel and the address list. The
+phone code they ran is otherwise the same.
+
 An expired code is rejected by the parser before any connection, with p7's
 `PairingPayloadError.expired` text.
 
@@ -233,8 +255,8 @@ Package Graph" for 10+ minutes after a test.
 
 - `~/.ssh/authorized_keys` on this Mac: the simulators' keys (`herdr-ios-sim-*` from
   `authorize-key.sh`, and later `herdr-ios:<device>:<date>` from pairing) were all removed again.
-  The remaining `herdr-ios-test` and `supedupsilly-to-mac` lines belong to the transport and hosts
-  lanes.
+  The remaining lines aren't this lane's: `herdr-ios-test` is transport's test key, and
+  `supedupsilly-to-mac` is a PC-to-Mac key that was already there. Both are left alone.
 - The PC's `C:\Users\volpe\.ssh\authorized_keys` got the simulators' keys for the Windows and
   pairing runs. They are removed, and only the two original lines remain. Its `herdr-ios-test`
   session is deleted.

@@ -118,6 +118,7 @@ private struct PairingReview: View {
     @State private var payload: Result<PairingPayload, Error>
     @State private var phase = Phase.review
     @State private var task: Task<Void, Never>?
+    @State private var deviceFingerprint: String?
 
     enum Phase: Equatable {
         case review, connecting, waiting, failed(String)
@@ -153,6 +154,7 @@ private struct PairingReview: View {
         }
         .interactiveDismissDisabled(phase == .connecting || phase == .waiting)
         .onDisappear { task?.cancel() }
+        .task { deviceFingerprint = try? DeviceKey.fingerprintSHA256() }
     }
 
     private func details(_ payload: PairingPayload) -> some View {
@@ -160,9 +162,19 @@ private struct PairingReview: View {
             Section {
                 LabeledContent("Computer", value: payload.name)
                 LabeledContent("Account", value: payload.username)
-                LabeledContent("Address", value: payload.hosts.first ?? "")
                 LabeledContent("Platform", value: payload.platform.label)
                 LabeledContent("herdr Session", value: payload.session ?? "default")
+            }
+            // Every address, not just the first: enroll falls through to the next one and saves
+            // whichever answers, so the user has to see all of them.
+            Section {
+                ForEach(payload.hosts, id: \.self) { Text($0) }
+            } header: {
+                Text(payload.hosts.count == 1 ? "Address" : "Addresses")
+            } footer: {
+                if payload.hosts.count > 1 {
+                    Text("Herdr tries these in order.")
+                }
             }
             Section {
                 ForEach(payload.fingerprints, id: \.self) { fingerprint in
@@ -176,30 +188,50 @@ private struct PairingReview: View {
                 Text("Herdr only connects if the computer presents one of these keys, so there's nothing to compare by hand.")
             }
             Section {
-                switch phase {
-                case .review:
-                    Button {
-                        pair(payload)
-                    } label: {
-                        Text("Pair").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                case .connecting:
-                    progress("Connecting to \(payload.name)…")
-                case .waiting:
-                    progress("Waiting for approval on \(payload.name)…")
-                case .failed(let message):
-                    Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                LabeledContent("Name", value: UIDevice.current.name)
+                LabeledContent("Key") {
+                    Text(deviceFingerprint ?? "…")
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
                 }
+            } header: {
+                Text("This Device")
             } footer: {
-                if phase == .waiting {
-                    Text("Approve this device at the herdr-pair prompt on \(payload.name).")
-                }
+                Text("When \(payload.name) asks you to approve, it shows a device key. Approve only if it's this one.")
             }
-            .listRowBackground(phase == .review ? Color.clear : nil)
-            .listRowInsets(phase == .review ? EdgeInsets() : nil)
+        }
+        // Pinned under the list, so Pair and the key check are never scrolled out of view.
+        .safeAreaInset(edge: .bottom) {
+            status(payload)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(.bar)
+        }
+    }
+
+    @ViewBuilder
+    private func status(_ payload: PairingPayload) -> some View {
+        switch phase {
+        case .review:
+            Button {
+                pair(payload)
+            } label: {
+                Text("Pair").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        case .connecting:
+            progress("Connecting to \(payload.name)…")
+        case .waiting:
+            VStack(alignment: .leading, spacing: 8) {
+                progress("Waiting for approval on \(payload.name)…")
+                Text("Approve only if \(payload.name) shows this device's key: \(deviceFingerprint ?? "…")")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
         }
     }
 

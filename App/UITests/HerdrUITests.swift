@@ -128,7 +128,14 @@ final class HerdrUITests: XCTestCase {
         // A host-key mismatch or pin conflict is refused before the approval step.
         let reached = Date().addingTimeInterval(30)
         while !waiting.exists, !(expect != "paired" && failure.exists), Date() < reached { sleep(1) }
-        if waiting.exists { snap("pair-waiting") }
+        if waiting.exists {
+            snap("pair-waiting")
+            // What the phone asks the user to compare with the computer's approval prompt.
+            let check = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "shows this device's key:")).firstMatch
+            if check.exists {
+                try? check.label.write(toFile: "\(dir)/\(tag)-device-check.txt", atomically: true, encoding: .utf8)
+            }
+        }
         if expect == "paired" {
             XCTAssert(waiting.exists, "never waited for approval")
             XCTAssert(waiting.waitForNonExistence(timeout: 150))

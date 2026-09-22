@@ -73,6 +73,7 @@ struct HostsView: View {
         }
         .sheet(item: $pairing) { route in
             PairingFlow(route: route) { host in selection = host.id }
+                .presentationSizing(.page)
         }
         // herdr://pair links, from the system Camera or `simctl openurl`.
         .onOpenURL { url in
