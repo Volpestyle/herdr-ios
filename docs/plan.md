@@ -58,9 +58,10 @@ from the existing identity and projects (macpad uses `DEVELOPMENT_TEAM = 8YW4D4C
 | hosts | w29:p4 | `docs/host-setup.md`, `scripts/**` | [lanes/hosts.md](lanes/hosts.md) |
 | review | w29:p5 | none (reserved for one bounded review at integration) | this file |
 | pairing: host helper | w29:p4 | `scripts/herdr-pair.py`, `scripts/qrcodegen*.py`, pairing section of `docs/host-setup.md` | lanes/hosts.md |
-| pairing: HerdrKit | w29:p2 | `Packages/HerdrKit/**` (`PairingPayload`, `Pairing.enroll`) | lanes/transport.md |
+| pairing: HerdrKit | w29:p2 | `Packages/HerdrKit/**` except the two parser files (`Pairing.enroll`) | lanes/transport.md |
+| pairing: parser | w29:p7 (Codex) | `HerdrKit/PairingPayload.swift`, `HerdrKitTests/PairingPayloadTests.swift` | commit message |
 | pairing: app | w29:p3 | `App/**` (URL scheme, scanner, pairing flow) | lanes/app.md |
-| pairing: protocol review | w29:p7 (Codex, co-w) | none; issues go to the lead, who owns ADR 0002 | — |
+
 
 All lanes share the `main` checkout at `~/dev/herdr-ios`. Load `shared-checkout` before
 committing, commit only your own paths, and commit directly on `main`.
