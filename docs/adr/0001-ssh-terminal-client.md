@@ -32,10 +32,13 @@ Option 1. Pieces:
 
 - **Network: the Tailscale iOS app.** The device joins the tailnet as a VPN, and hosts are
   reached by MagicDNS name or `100.x` address. Nothing from Tailscale is embedded in the app.
-- **Transport: SSH via Citadel on swift-nio-ssh.** Auth uses a per-device Ed25519 key stored in
-  the Keychain (this-device-only), with password as a fallback. The app requests a PTY, runs the
-  herdr attach command, and forwards window changes on resize. Host keys are pinned on first use
-  with an explicit prompt, and a changed key is a hard stop.
+- **Transport: SSH on upstream apple/swift-nio-ssh directly.** Auth uses a per-device Ed25519 key
+  stored in the Keychain (this-device-only), with password as a fallback. The app requests a PTY,
+  runs the herdr attach command, and forwards window changes on resize. Host keys are pinned on
+  first use with an explicit prompt, and a changed key is a hard stop. Citadel was tried and
+  rejected. Its public connect path trips a NIO event-loop precondition, its TTY API has no
+  pty-req + exec, and it pins a personal swift-nio-ssh fork (details in
+  `docs/lanes/transport.md#decisions`).
 - **Terminal: SwiftTerm `TerminalView` (UIKit).** It is wrapped for SwiftUI and adds an accessory
   row for herdr: the prefix `ctrl+b`, esc, tab, ctrl and arrows. Taps act as mouse clicks when
   herdr enables mouse reporting. Hardware keyboards and pointers work on iPad.

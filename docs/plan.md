@@ -106,7 +106,7 @@ Changed host keys are refused inside HerdrKit. `confirmHostKey` is only asked on
 
 | Lane | Stage | Next action |
 | --- | --- | --- |
-| transport | dispatched | build HerdrKit; integration-test against this Mac's sshd |
+| transport | done (4ec8f06), in review | p5 bounded security review of HerdrKit |
 | app | dispatched | scaffold, terminal UI, consume HerdrKit, simulator + device |
-| hosts | accepted (b5fa037) | macOS + Windows attach verified; follow-up: stable herdr PATH on supedupsilly |
-| review | reserved | one bounded review when transport + app join |
+| hosts | accepted (b5fa037) | macOS + Windows attach verified; known gap: PC PATH pins herdr 0.9.0 release folder (60f9d3a) |
+| review | HerdrKit now; app integration boundary when app lands | |
