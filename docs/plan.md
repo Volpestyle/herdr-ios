@@ -125,10 +125,23 @@ Changed host keys are refused inside HerdrKit. `confirmHostKey` is only asked on
 
 ## Status
 
-| Lane | Stage | Next action |
+| Lane | Stage | Evidence |
 | --- | --- | --- |
-| transport | accepted (4ec8f06 + review fixes c9a58c7) | none; app consumes it |
-| hosts | accepted (b5fa037) | macOS + Windows attach verified; known gap: PC PATH pins herdr 0.9.0 release folder (60f9d3a) |
-| app | accepted (245a04d, 8741db6, 7bd842c) | iPhone installed; iPad waits on unlock |
-| review | HerdrKit and app: accept-with-fixes, all fixed | pairing security review when it lands |
-| pairing | dispatched | p4 helper, p2 HerdrKit, p3 app, in parallel against ADR 0002 |
+| hosts | accepted | macOS + Windows attach verified; `authorize-key.sh`; [lanes/hosts.md](lanes/hosts.md) |
+| transport | accepted | HerdrKit, 55 tests incl. live sshd; two review passes fixed; [lanes/transport.md](lanes/transport.md) |
+| app | accepted | simulator e2e on iPhone and iPad against the Mac and the PC; [lanes/app.md](lanes/app.md) |
+| pairing | accepted | helper + HerdrKit + parser + app; sim e2e on both hosts incl. deny, USED and tamper cases; security review fixed |
+| devices | partial | iPhone 17 Pro Max has the current build installed; iPad Pro 13 install is queued until it unlocks; physical QR scan is the user's check |
+
+Known gaps:
+
+- supedupsilly's PATH pins herdr's versioned 0.9.0 folder. The stable bin folder is a junction
+  that elevated SSH sessions refuse to follow, so after a herdr update SSH may run the old client.
+  Needs an upstream herdr installer fix (a real copy or hardlink in `bin`).
+- The app strips one ConPTY mouse-reset sequence to work around a SwiftTerm bug. Upstream
+  SwiftTerm fix: `cmdResetMode` should clear the mouse encoding only for the active mode.
+- herdr's PowerShell prompt integration throws under `Set-StrictMode` (upstream `src/pane.rs`).
+- iPhone to Windows: narrow panes can show blank for a few seconds after reattach (likely late
+  ConPTY repaint). iPad redraws fine.
+- The transport sshd suite's `herdr-ios-test` key stays in `~/.ssh/authorized_keys` on this Mac.
+  Removal steps are in [lanes/transport.md](lanes/transport.md#authorized_keys-entry-remove-later).
