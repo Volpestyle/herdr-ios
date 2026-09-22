@@ -107,7 +107,16 @@ the entry that connected, `u`, `p`, `os`, session `s`), connect with `DeviceKey`
   shows the computer and account before connecting, and the host key must match the QR, so a
   malicious QR gets you a session to a machine the attacker already controls. That's the same
   trust as typing that host in by hand.
-- **Existing pins win.** A QR can't re-pin a host whose key changed.
+- **Existing pins win.** A QR can't re-pin a host whose key changed. After `OK` the phone checks
+  the pin state again before pinning, so a pin written in the meantime by another session is
+  never replaced.
+- **Concurrent enrolls.** The forced command claims the pairing id atomically (exclusive create),
+  so a second enroll is refused. The approval is bound to the exact key fingerprint shown in the
+  prompt and can't be swapped afterwards.
+- **Forced command on Windows.** `restrict` and `command=` have to deny arbitrary exec, PTY and
+  forwarding under Windows OpenSSH too. This is verified, not assumed.
+- **Secrets at rest.** Neither the seed nor the full pairing URL is logged by the helper, HerdrKit
+  or the app. The helper prints the URL only behind an explicit test flag.
 
 ## Consequences
 
