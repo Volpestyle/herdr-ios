@@ -85,8 +85,10 @@ enum HostKeyPins {
         try Keychain.read(service: service, account: account(hostname, port)).map { String(decoding: $0, as: UTF8.self) }
     }
 
-    static func pin(_ fingerprint: String, hostname: String, port: Int) throws {
-        try Keychain.set(Data(fingerprint.utf8), service: service, account: account(hostname, port))
+    /// Add-only: an existing pin changes only through `forget`. Returns `false` if one was already there.
+    @discardableResult
+    static func pin(_ fingerprint: String, hostname: String, port: Int) throws -> Bool {
+        try Keychain.add(Data(fingerprint.utf8), service: service, account: account(hostname, port))
     }
 
     static func forget(hostname: String, port: Int) throws {
@@ -103,5 +105,13 @@ enum HostKeyPins {
         "SHA256:" + Data(SHA256.hash(data: blob)).base64EncodedString().replacingOccurrences(of: "=", with: "")
     }
 
-    private static func account(_ hostname: String, _ port: Int) -> String { "\(hostname.lowercased()):\(port)" }
+    /// One spelling per host for both the pin and the connect: trimmed, lowercased, and without the
+    /// DNS root dot, so `Host.ts.net.` and `host.ts.net` share a pin.
+    static func canonical(_ hostname: String) -> String {
+        var host = hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if host.hasSuffix(".") { host.removeLast() }
+        return host
+    }
+
+    private static func account(_ hostname: String, _ port: Int) -> String { "\(canonical(hostname)):\(port)" }
 }

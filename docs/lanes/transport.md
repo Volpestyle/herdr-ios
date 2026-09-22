@@ -34,8 +34,14 @@ Behavior the app relies on:
   `.connected`, such as `ctrl+b q`, gives `.closed`. Any other exit is `.failed`. That covers exit
   0 within 2 s (Windows reports 0 when `herdr` isn't recognized), any non-zero status (127 names
   "not found"), and a dropped connection.
-- `onOutput` gets stdout and stderr in order on the MainActor. `send` writes stdin, and `resize`
-  sends an SSH window-change. The PTY is `xterm-256color` with IUTF8 set.
+- `onOutput` gets stdout and stderr in order on the MainActor, one chunk per network read burst.
+  `send` writes stdin, and `resize` sends an SSH window-change. The PTY is `xterm-256color` with
+  IUTF8 set.
+- Output has backpressure. The next read waits until `onOutput` returns, so a slow or blocked
+  MainActor stalls the host in its SSH window instead of buffering in app memory.
+- The hostname is canonicalized (trimmed, lowercased, trailing `.` dropped) for both the connect
+  and the pin. `Host.ts.net.` and `host.ts.net` share one pin, while `100.x`, the short MagicDNS
+  name and the FQDN each get their own, like `known_hosts`.
 
 ## Decisions
 
@@ -56,7 +62,17 @@ ends before auth, and no credential reaches an unconfirmed host. The session the
 pinned fingerprint. Because of this, the trust prompt never sits inside a live handshake, where it
 would hit handshake timeouts or sshd's `LoginGraceTime`. The state is decided from the key the
 host presented, not from how NIO reported the failure. A disconnect during the prompt discards the
-answer: generation checks follow every await.
+answer: generation checks follow every await. Pinning is add-only. If two sessions to a new host
+both prompt, the later approval keeps the earlier pin, and its reconnect either matches that pin or
+takes the changed-key refusal. A pin changes only through `forgetHostKey`.
+
+**Backpressure.** The session channel runs with autoRead off. `PTYHandler` collects one read
+burst into a single `.output` event, and the MainActor pump requests the next read after
+`onOutput` returns. NIOSSH sends WINDOW_ADJUST only when bytes reach the pipeline, so unread
+output waits in the host's SSH window (`maximumPacketSize` × 64), and at most one burst sits in the
+app. Every NIO promise is completed on every path. A failed TCP connect fails the auth promise, and
+a `createChannel` that fails before its initializer runs fails `ready`. NIO traps on a leaked
+promise in debug builds.
 
 ```mermaid
 sequenceDiagram
@@ -71,8 +87,8 @@ sequenceDiagram
     TS-->>Host: refuse (no auth sent)
     TS->>App: confirmHostKey(.firstUse, SHA256(K))
     alt approved and still current
-      TS->>TS: pin SHA256(K) in Keychain
-      TS->>Host: reconnect, must present K
+      TS->>TS: pin SHA256(K) in Keychain (add-only)
+      TS->>Host: reconnect, must present the pinned key
     else declined or disconnected
       TS-->>App: failed / closed, nothing pinned
     end
@@ -91,7 +107,7 @@ sequenceDiagram
 | Service | Account | Data |
 | --- | --- | --- |
 | `com.volpestyle.herdr.device-key` | `ed25519` | 32-byte raw private key, created on first use |
-| `com.volpestyle.herdr.host-key` | `hostname:port` (lowercased) | `SHA256:…` fingerprint |
+| `com.volpestyle.herdr.host-key` | canonical `hostname:port` | `SHA256:…` fingerprint |
 | `com.volpestyle.herdr.password` | host UUID | password |
 
 Pins are keyed by `hostname:port` like `known_hosts`, so deleting a profile doesn't forget its
@@ -106,7 +122,7 @@ In `Packages/HerdrKit`:
 
 - `swift build`: clean, no warnings in HerdrKit sources. `xcodebuild -scheme HerdrKit
   -destination 'generic/platform=iOS Simulator' build`: `BUILD SUCCEEDED`.
-- `swift test`: 23 tests in 6 suites pass, and the 8 sshd tests are skipped. Run with no network
+- `swift test`: 29 tests in 6 suites pass, and the 9 sshd tests are skipped. Run with no network
   setup:
   - Attach strings match host-setup exactly.
   - Invalid names are quoted instead of trapping. The unix attach command goes through real
@@ -114,6 +130,7 @@ In `Packages/HerdrKit`:
     quotes, empty). herdr always receives `session attach <name>` and nothing executes.
   - herdr's name rule: 3 valid and 11 invalid cases.
   - DeviceKey output parses as an OpenSSH key, and fingerprints equal `ssh-keygen -l -E sha256`.
+    Hostname spellings share one pin, and pins are add-only.
   - HostStore round-trips JSON and Keychain.
   - Output-tail stripping works on unix and ConPTY-shaped bytes.
   - An in-process NIOSSH server covers trust: first use approved pins the exact key, reconnects,
@@ -121,7 +138,11 @@ In `Packages/HerdrKit`:
     without a prompt, the pin is untouched, and no auth attempt reaches the impostor. A disconnect
     during the prompt leaves `.closed`, no pin, and no second socket. An invalid session name
     fails before connecting.
-- `HERDR_IOS_SSH_TEST=1 swift test`: 23 tests in 6 suites pass, against this Mac's sshd at
+  - A concurrent first-use approval keeps the first pin and refuses the other key as changed.
+  - A refused channel open fails the session.
+  - A refused TCP connect (`127.0.0.1:1`) fails the session instead of trapping on a leaked promise.
+  - A channel open on a connection with no SSH handler completes `ready`.
+- `HERDR_IOS_SSH_TEST=1 swift test`: 29 tests in 6 suites pass, against this Mac's sshd at
   `127.0.0.1:22` as `james` with the DeviceKey:
   - First use pins a fingerprint that is in `ssh-keyscan 127.0.0.1` | `ssh-keygen -l`.
   - `TERM=xterm-256color` and `stty size` = `24 80`. After `resize(120, 40)` and a sent line, it's
@@ -132,6 +153,11 @@ In `Packages/HerdrKit`:
   - A quick exit 0 fails with its output, and a clean exit after 2.2 s is `.closed`.
   - A changed pinned key against the real sshd is refused, and `rejectedHostKey` names the live
     fingerprint.
+  - Backpressure: `onOutput` blocks the MainActor for 3 s on the first chunk while the host writes
+    64 MB. The writer hasn't finished when the stall ends. All 64 MB then arrive, and no chunk is
+    over 16 MB.
+- Each of the leak, backpressure and add-only-pin tests fails against a scratch copy with its fix
+  removed. Without backpressure, the 64 MB writer finishes during the stall.
 
 ### authorized_keys entry (remove later)
 

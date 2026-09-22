@@ -106,7 +106,7 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
     /// Rechecks `generation` after every await, so a `disconnect()` during the trust prompt
     /// can't pin the stale answer or open another socket.
     private func authenticate(generation: Int) async throws -> Channel {
-        let host = profile.hostname, port = profile.port
+        let host = HostKeyPins.canonical(profile.hostname), port = profile.port
         let credentials = Credentials(
             username: profile.username, key: try DeviceKey.privateKey(), password: store.password(for: profile.id))
         while true {
@@ -127,8 +127,10 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
                 let trusted = await confirmHostKey(challenge)
                 guard isCurrent(generation) else { throw CancellationError() }
                 guard trusted else { throw SessionError.hostKeyNotTrusted }
+                // Add-only: if another session pinned this host meanwhile, keep its pin. The loop re-reads
+                // the pin, so this key either matches it or takes the changed-key refusal.
                 try HostKeyPins.pin(presented, hostname: host, port: port)
-                // Reconnect; the next handshake must present exactly this key.
+                // Reconnect; the next handshake must present exactly the pinned key.
             }
         }
     }
@@ -138,7 +140,7 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
     ) async throws -> Channel {
         let loop = MultiThreadedEventLoopGroup.singleton.next()
         let authenticated = loop.makePromise(of: Void.self)
-        let tcp = try await ClientBootstrap(group: loop)
+        let bootstrap = ClientBootstrap(group: loop)
             .connectTimeout(.seconds(15))
             .channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value: 1)
             .channelInitializer { channel in
@@ -149,7 +151,13 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
                         AuthWaiter(authenticated))
                 }
             }
-            .connect(host: host, port: port).get()
+        let tcp: Channel
+        do {
+            tcp = try await bootstrap.connect(host: host, port: port).get()
+        } catch {
+            authenticated.fail(error)  // NIO traps on an unfulfilled promise in debug builds
+            throw error
+        }
         let timeout = loop.scheduleTask(in: .seconds(20)) { authenticated.fail(ChannelError.connectTimeout(.seconds(20))) }
         do {
             try await authenticated.futureResult.get()
@@ -165,12 +173,41 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
     private func openPTY(on connection: Channel, command: String, cols: Int, rows: Int, generation: Int) async throws {
         let (events, sink) = AsyncStream<PTYEvent>.makeStream()
         let ready = connection.eventLoop.makePromise(of: Void.self)
-        let pty = try await connection.eventLoop.flatSubmit {
+        let pty = try await Self.openSessionChannel(on: connection, ready: ready, events: sink)
+        guard isCurrent(generation) else { throw CancellationError() }
+        self.pty = pty
+        Task { [weak self] in
+            for await event in events { self?.handle(event, generation: generation) }
+        }
+        do {
+            try await pty.triggerUserOutboundEvent(SSHChannelRequestEvent.PseudoTerminalRequest(
+                wantReply: true, term: "xterm-256color",
+                terminalCharacterWidth: max(cols, 1), terminalRowHeight: max(rows, 1),
+                terminalPixelWidth: 0, terminalPixelHeight: 0,
+                terminalModes: SSHTerminalModes([.init(rawValue: 42): 1]))).get()  // IUTF8 (RFC 8160)
+            try await pty.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(command: command, wantReply: true)).get()
+            try await ready.futureResult.get()
+        } catch {
+            ready.fail(error)
+            throw error
+        }
+    }
+
+    /// Opens a session channel carrying a `PTYHandler`. `ready` is completed on every path, including
+    /// a `createChannel` that fails before the initializer runs (connection gone after auth).
+    nonisolated static func openSessionChannel(
+        on connection: Channel, ready: EventLoopPromise<Void>, events sink: AsyncStream<PTYEvent>.Continuation
+    ) async throws -> Channel {
+        try await connection.eventLoop.flatSubmit {
             let created = connection.eventLoop.makePromise(of: Channel.self)
+            created.futureResult.whenFailure { ready.fail($0) }
             do {
                 let ssh = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
                 ssh.createChannel(created, channelType: .session) { child, _ in
                     child.eventLoop.makeCompletedFuture {
+                        // Backpressure: read only when the MainActor has taken the last chunk, so unread
+                        // output waits in the host's SSH window instead of app memory.
+                        try child.syncOptions?.setOption(ChannelOptions.autoRead, value: false)
                         try child.pipeline.syncOperations.addHandler(PTYHandler(ready: ready, events: sink))
                     }
                 }
@@ -179,26 +216,15 @@ public enum SessionState: Equatable, Sendable { case idle, connecting, connected
             }
             return created.futureResult
         }.get()
-        guard isCurrent(generation) else { throw CancellationError() }
-        self.pty = pty
-        Task { [weak self] in
-            for await event in events { self?.handle(event, generation: generation) }
-        }
-        try await pty.triggerUserOutboundEvent(SSHChannelRequestEvent.PseudoTerminalRequest(
-            wantReply: true, term: "xterm-256color",
-            terminalCharacterWidth: max(cols, 1), terminalRowHeight: max(rows, 1),
-            terminalPixelWidth: 0, terminalPixelHeight: 0,
-            terminalModes: SSHTerminalModes([.init(rawValue: 42): 1]))).get()  // IUTF8 (RFC 8160)
-        try await pty.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(command: command, wantReply: true)).get()
-        try await ready.futureResult.get()
     }
 
     private func handle(_ event: PTYEvent, generation: Int) {
         guard isCurrent(generation) else { return }
         switch event {
         case .output(let bytes):
-            recentOutput = Array((recentOutput + bytes).suffix(4096))
+            recentOutput = Array((recentOutput + bytes.suffix(4096)).suffix(4096))
             onOutput?(bytes)
+            pty?.read()  // the next chunk
         case .exitStatus(let code): exitStatus = code
         case .error(let message): lastError = message
         case .closed:
@@ -347,12 +373,16 @@ enum PTYEvent: Sendable { case output([UInt8]), exitStatus(Int), error(String), 
 
 /// Session-channel handler: forwards stdout/stderr and lifecycle into an ordered stream, and
 /// completes `ready` once the PTY and exec requests are both accepted.
+///
+/// The channel runs with autoRead off. Each read burst becomes one `.output` event, and the
+/// consumer requests the next read, so at most one burst (at most one SSH window) sits in memory.
 final class PTYHandler: ChannelInboundHandler {
     typealias InboundIn = SSHChannelData
 
     private let ready: EventLoopPromise<Void>
     private let events: AsyncStream<PTYEvent>.Continuation
     private var pendingReplies = 2  // pty-req, exec
+    private var burst: [UInt8] = []
 
     init(ready: EventLoopPromise<Void>, events: AsyncStream<PTYEvent>.Continuation) {
         self.ready = ready
@@ -362,7 +392,22 @@ final class PTYHandler: ChannelInboundHandler {
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let data = unwrapInboundIn(data)
         guard case .byteBuffer(let buffer) = data.data, data.type == .channel || data.type == .stdErr else { return }
-        events.yield(.output(Array(buffer.readableBytesView)))
+        burst.append(contentsOf: buffer.readableBytesView)
+    }
+
+    func channelReadComplete(context: ChannelHandlerContext) {
+        if burst.isEmpty {
+            context.read()  // nothing for the consumer to take, so it won't ask; keep reading
+        } else {
+            events.yield(.output(burst))
+            burst = []
+        }
+        context.fireChannelReadComplete()
+    }
+
+    func channelActive(context: ChannelHandlerContext) {
+        context.read()
+        context.fireChannelActive()
     }
 
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
@@ -388,6 +433,7 @@ final class PTYHandler: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        if !burst.isEmpty { events.yield(.output(burst)) }
         ready.fail(ChannelError.eof)
         events.yield(.closed)
         events.finish()

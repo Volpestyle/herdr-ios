@@ -83,6 +83,18 @@ import Testing
         _ = try NIOSSHPublicKey(openSSHPublicKey: line)
     }
 
+    @Test func hostnameSpellingsShareOnePin() throws {
+        #expect(HostKeyPins.canonical(" Host.Tail1234.ts.net. \n") == "host.tail1234.ts.net")
+        #expect(HostKeyPins.canonical("100.103.220.58") == "100.103.220.58")
+        let host = "herdrkit-\(UUID()).ts.net"
+        defer { try? HostKeyPins.forget(hostname: host, port: 22) }
+        #expect(try HostKeyPins.pin("SHA256:a", hostname: host.uppercased() + ".", port: 22))
+        #expect(try HostKeyPins.fingerprint(hostname: " \(host) ", port: 22) == "SHA256:a")
+        #expect(try HostKeyPins.pin("SHA256:b", hostname: host, port: 22) == false)  // add-only
+        #expect(try HostKeyPins.fingerprint(hostname: host, port: 22) == "SHA256:a")
+        #expect(try HostKeyPins.fingerprint(hostname: host, port: 2222) == nil)
+    }
+
     @Test func fingerprintMatchesSshKeygen() throws {
         // This Mac's sshd ed25519 host key; `ssh-keygen -lf` prints the same SHA256 value.
         let line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPAjE1mI2c0NdpJtgyM6X78KWFoWASbfap0XOy8ir/MK"
@@ -118,7 +130,7 @@ import Testing
     }
 }
 
-/// TOFU and the changed-key refusal against an in-process SSH server that rejects every login.
+/// TOFU, the changed-key refusal, and failure paths against an in-process SSH server.
 @MainActor @Suite struct HostKeyTrustTests {
     let server: TestSSHServer
     let store = HostStore(fileURL: URL.temporaryDirectory.appending(path: "herdrkit-\(UUID()).json"))
@@ -175,6 +187,53 @@ import Testing
         #expect(s.state == .closed)
         #expect(try pin() == nil)
         #expect(server.authAttempts == 0)  // no second socket
+    }
+
+    /// Two sessions to one new host each get a first-use prompt; the later approval must not replace
+    /// the pin the earlier one wrote, and a different key behind it is a changed-key refusal.
+    @Test func concurrentFirstUseKeepsTheFirstPin() async throws {
+        defer { server.stop() }
+        let other = "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        let s = session { _ in
+            try? HostKeyPins.pin(other, hostname: "127.0.0.1", port: self.server.port)  // the other session's approval
+            return true
+        }
+        await s.connect(cols: 80, rows: 24)
+        #expect(try pin() == other)
+        #expect(s.rejectedHostKey?.kind == .changed(previousFingerprint: other))
+        #expect(server.authAttempts == 0)
+    }
+
+    @Test func refusedChannelOpenFails() async throws {
+        server.stop()
+        let accepting = try await TestSSHServer.start(acceptLogins: true)
+        defer { accepting.stop() }
+        let s = TerminalSession(profile: HostProfile(name: "t", hostname: "127.0.0.1", port: accepting.port, username: "t"), store: store) { _ in true }
+        await s.connect(cols: 80, rows: 24)
+        #expect(accepting.authAttempts > 0)
+        guard case .failed = s.state else { Issue.record("got \(s.state)"); return }
+    }
+
+    /// A connection that can't open a session channel (here: no SSH on it at all) must still complete
+    /// `ready`; NIO traps on a leaked promise in debug builds.
+    @Test func failedChannelCreationCompletesReady() async throws {
+        defer { server.stop() }
+        let tcp = try await ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton).connect(host: "127.0.0.1", port: server.port).get()
+        defer { tcp.close(promise: nil) }
+        let ready = tcp.eventLoop.makePromise(of: Void.self)
+        let completed = NIOLockedValueBox(false)
+        ready.futureResult.whenComplete { _ in completed.withLockedValue { $0 = true } }
+        let (_, sink) = AsyncStream<PTYEvent>.makeStream()
+        await #expect(throws: (any Error).self) { try await TerminalSession.openSessionChannel(on: tcp, ready: ready, events: sink) }
+        #expect(completed.withLockedValue { $0 })
+    }
+
+    @Test func unreachableHostFails() async throws {
+        defer { server.stop() }
+        let s = TerminalSession(profile: HostProfile(name: "t", hostname: "127.0.0.1", port: 1, username: "t"), store: store) { _ in true }
+        await s.connect(cols: 80, rows: 24)
+        guard case .failed(let message) = s.state else { Issue.record("got \(s.state)"); return }
+        #expect(message.contains("Could not reach the host"), "\(message)")
     }
 
     @Test func invalidSessionNameFailsBeforeConnecting() async throws {
@@ -271,9 +330,34 @@ struct SSHDIntegrationTests {
         #expect(await eventually(.seconds(15)) { later.state == .closed }, "state: \(later.state)")
     }
 
+    /// A stalled consumer must stall the host too: unread output waits in the SSH window, so a
+    /// 64 MB writer can't finish while the MainActor is blocked, and every byte still arrives.
+    @Test func slowConsumerHoldsBackTheHost() async throws {
+        let marker = URL.temporaryDirectory.appending(path: "herdrkit-bp-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        let total = 64_000_000
+        let s = session("head -c \(total) /dev/zero; touch \(marker.path); exec cat")
+        let seen = Progress()
+        s.onOutput = { bytes in
+            seen.bytes += bytes.count
+            seen.largestChunk = max(seen.largestChunk, bytes.count)
+            if seen.finishedDuringStall == nil {
+                Thread.sleep(forTimeInterval: 3)
+                seen.finishedDuringStall = FileManager.default.fileExists(atPath: marker.path)
+            }
+        }
+        await s.connect(cols: 80, rows: 24)
+        #expect(await eventually(.seconds(90)) { seen.bytes >= total }, "received \(seen.bytes)")
+        #expect(seen.finishedDuringStall == false)
+        #expect(await eventually { FileManager.default.fileExists(atPath: marker.path) })
+        #expect(seen.largestChunk <= 16 << 20, "largest chunk \(seen.largestChunk)")
+        s.disconnect()
+    }
+
     @Test func changedSshdKeyIsRefused() async throws {
         defer { store.forgetHostKey(hostname: "127.0.0.1", port: 22) }
         let stale = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        store.forgetHostKey(hostname: "127.0.0.1", port: 22)
         try HostKeyPins.pin(stale, hostname: "127.0.0.1", port: 22)
         var prompted = false
         let s = session("true") { _ in prompted = true; return true }
@@ -289,6 +373,12 @@ struct SSHDIntegrationTests {
 
 extension SessionState {
     var failureMessage: String? { if case .failed(let message) = self { message } else { nil } }
+}
+
+@MainActor final class Progress {
+    var bytes = 0
+    var largestChunk = 0
+    var finishedDuringStall: Bool?
 }
 
 @MainActor final class Transcript {
@@ -335,27 +425,30 @@ final class TestSSHServer: Sendable {
     let port: Int
     let fingerprint: String
     private let channel: Channel
-    private let auth: RejectAll
+    private let auth: TestAuth
 
     var authAttempts: Int { auth.attempts.withLockedValue { $0 } }
 
-    private init(port: Int, fingerprint: String, channel: Channel, auth: RejectAll) {
+    private init(port: Int, fingerprint: String, channel: Channel, auth: TestAuth) {
         self.port = port
         self.fingerprint = fingerprint
         self.channel = channel
         self.auth = auth
     }
 
-    static func start() async throws -> TestSSHServer {
+    /// `acceptLogins` lets any key in but refuses every channel open.
+    static func start(acceptLogins: Bool = false) async throws -> TestSSHServer {
         let key = Curve25519.Signing.PrivateKey()
         let hostKey = NIOSSHPrivateKey(ed25519Key: key)
-        let auth = RejectAll()
+        let auth = TestAuth(accept: acceptLogins)
         let channel = try await ServerBootstrap(group: MultiThreadedEventLoopGroup.singleton)
             .childChannelInitializer { child in
                 child.eventLoop.makeCompletedFuture {
                     let config = SSHServerConfiguration(hostKeys: [hostKey], userAuthDelegate: auth)
                     try child.pipeline.syncOperations.addHandler(
-                        NIOSSHHandler(role: .server(config), allocator: child.allocator, inboundChildChannelInitializer: nil))
+                        NIOSSHHandler(role: .server(config), allocator: child.allocator) { channel, _ in
+                            channel.eventLoop.makeFailedFuture(ChannelError.operationUnsupported)
+                        })
                 }
             }
             .bind(host: "127.0.0.1", port: 0).get()
@@ -369,12 +462,15 @@ final class TestSSHServer: Sendable {
     }
 }
 
-final class RejectAll: NIOSSHServerUserAuthenticationDelegate, Sendable {
+final class TestAuth: NIOSSHServerUserAuthenticationDelegate, Sendable {
     let attempts = NIOLockedValueBox(0)
+    let accept: Bool
+
+    init(accept: Bool) { self.accept = accept }
     var supportedAuthenticationMethods: NIOSSHAvailableUserAuthenticationMethods { .publicKey }
 
     func requestReceived(request: NIOSSHUserAuthenticationRequest, responsePromise: EventLoopPromise<NIOSSHUserAuthenticationOutcome>) {
         attempts.withLockedValue { $0 += 1 }
-        responsePromise.succeed(.failure)
+        responsePromise.succeed(accept ? .success : .failure)
     }
 }
