@@ -83,6 +83,10 @@ import Testing
         _ = try NIOSSHPublicKey(openSSHPublicKey: line)
     }
 
+    @Test func deviceFingerprintMatchesSshKeygen() throws {
+        #expect(try DeviceKey.fingerprintSHA256() == (try sshKeygenFingerprint(try DeviceKey.publicKeyOpenSSH())))
+    }
+
     @Test func hostnameSpellingsShareOnePin() throws {
         #expect(HostKeyPins.canonical(" Host.Tail1234.ts.net. \n") == "host.tail1234.ts.net")
         #expect(HostKeyPins.canonical("100.103.220.58") == "100.103.220.58")

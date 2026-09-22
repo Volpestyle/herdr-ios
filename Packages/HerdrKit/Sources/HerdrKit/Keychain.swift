@@ -60,6 +60,12 @@ public enum DeviceKey {
         "ssh-ed25519 \(wireBlob(try privateKey().publicKey).base64EncodedString()) herdr-ios"
     }
 
+    /// `SHA256:…` of the public key, the value `ssh-keygen -l` and the pairing helper's approval
+    /// prompt print, so the user can match this device on the computer.
+    public static func fingerprintSHA256() throws -> String {
+        HostKeyPins.fingerprintSHA256(blob: wireBlob(try privateKey().publicKey))
+    }
+
     static func privateKey() throws -> Curve25519.Signing.PrivateKey {
         if let raw = try Keychain.read(service: service, account: account) {
             return try Curve25519.Signing.PrivateKey(rawRepresentation: raw)

@@ -31,6 +31,7 @@ already uses them:
 | `TerminalSession.profile`, `TerminalSession.rejectedHostKey` | `rejectedHostKey` carries the `.changed(previousFingerprint:)` challenge after a refusal, for the mismatch UI. |
 | `HerdrCommand.sessionNameError(_:)` | herdr's own `validate_name` rule, returning herdr's message. Use it for form validation. |
 | `HostKeyChallenge: Equatable` | Tests and UI diffing. |
+| `DeviceKey.fingerprintSHA256()` | `SHA256:…` of the device key, the same value the pairing helper's approval prompt prints, so the phone can show what the computer asks about. |
 
 Behavior the app relies on:
 
