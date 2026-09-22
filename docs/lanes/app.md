@@ -221,10 +221,10 @@ Package Graph" for 10+ minutes after a test.
 
 - Signed build: `generic/platform=iOS` with `-allowProvisioningUpdates` builds and signs with
   `Apple Development: James Volpe`, team `8YW4D4C6CW`, `iOS Team Provisioning Profile: *`.
-- iPhone 17 Pro Max (`00008150-0016258C21F2401C`): **installed and launched** with the final
-  code. `devicectl device process launch` answered "Launched application with
-  com.volpestyle.herdr bundle identifier", and `devicectl device info apps` lists
-  `Herdr com.volpestyle.herdr 0.1.0 1`.
+- iPhone 17 Pro Max (`00008150-0016258C21F2401C`): installed and launched while it was unlocked.
+  `devicectl device info apps` listed `Herdr com.volpestyle.herdr 0.1.0 1`. The build with QR
+  pairing (`85d0786`) was installed over it later, but its launch was refused because the phone had
+  locked again. It opens normally from the home screen.
 - iPad Pro 13 (`00008142-00117899226B401C`): not installed yet. It is locked:
   `The developer disk image could not be mounted on this device … The device is currently locked.`
   A retry loop installs and launches as soon as it unlocks.
