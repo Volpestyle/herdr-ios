@@ -62,6 +62,20 @@ final class HerdrTerminalView: TerminalView {
         _ = resignFirstResponder()
     }
 
+    /// Feeds host output. SwiftTerm (through 1.20 and main as of 2026-09-19) sets the mouse
+    /// encoding to X10 on *any* encoding DECRST, even one that isn't active, and Windows ConPTY
+    /// sends `?1016l` right after `?1006h`. Clicks then reach Windows hosts as X10 bytes, which
+    /// ConPTY types into the pane as text.
+    /// ponytail: drops only that exact sequence, so one split across two reads slips through.
+    /// Delete this once SwiftTerm's cmdResetMode only clears the encoding that is active.
+    func feedHost(_ bytes: [UInt8]) {
+        var bytes = bytes
+        while let range = bytes.firstRange(of: Self.resetSGRPixelMouse) { bytes.removeSubrange(range) }
+        feed(byteArray: bytes[...])
+    }
+
+    private static let resetSGRPixelMouse: [UInt8] = [0x1b, 0x5b, 0x3f, 0x31, 0x30, 0x31, 0x36, 0x6c]  // ESC [ ? 1016 l
+
     /// SwiftTerm spends the first tap on an unfocused view becoming first responder, so that
     /// tap never reaches herdr. Report it ourselves as a left click when mouse reporting is on.
     func sendClick(at point: CGPoint) {

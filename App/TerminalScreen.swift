@@ -108,8 +108,10 @@ private struct HostKeySheet: View {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel", role: .cancel) { answer(false) }
                     }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Trust", role: .confirm) { answer(true) }
+                    // Not the confirmation slot: that is the default action, and a reflexive Return on
+                    // a hardware keyboard must never trust an unverified key.
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Trust") { answer(true) }
                     }
                 }
             }

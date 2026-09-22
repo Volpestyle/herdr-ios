@@ -3,7 +3,8 @@ import XCTest
 /// Drives the app against a live host, adding it as "This Mac" through the editor if missing. Its
 /// herdr session must be a throwaway one (never the host's default session: herdr sizes every
 /// pane to the foreground client). Pass settings as TEST_RUNNER_<NAME> to xcodebuild:
-/// HERDR_TEST_HOST, HERDR_TEST_USER, HERDR_TEST_SESSION, EVIDENCE_DIR, EVIDENCE_TAG.
+/// HERDR_TEST_NAME, HERDR_TEST_HOST, HERDR_TEST_USER, HERDR_TEST_SESSION, HERDR_TEST_KILL_LINE,
+/// EVIDENCE_DIR, EVIDENCE_TAG.
 final class HerdrUITests: XCTestCase {
     private let app = XCUIApplication()
     private let env = ProcessInfo.processInfo.environment
@@ -35,7 +36,7 @@ final class HerdrUITests: XCTestCase {
 
     func testLiveHerdr() throws {
         // iPad portrait can launch with the sidebar collapsed.
-        let host = app.staticTexts["This Mac"].firstMatch
+        let host = app.staticTexts[hostName].firstMatch
         if !host.waitForExistence(timeout: 3) { showSidebar() }
         if !host.waitForExistence(timeout: 3) { addHost() }
         XCTAssert(host.waitForExistence(timeout: 5))
@@ -50,10 +51,11 @@ final class HerdrUITests: XCTestCase {
         app.typeText("echo herdr-ios-typed\n")
         key("up")
         app.typeText("\n")
-        // Sticky ctrl: ctrl+u kills the half-typed line, so only the ok marker runs.
+        // Sticky ctrl: the kill-line chord drops the half-typed line, so only the ok marker runs.
+        // zsh binds ctrl+u; PowerShell's Windows edit mode cancels the line on ctrl+c instead.
         app.typeText("echo herdr-ios-ctrl-FAIL")
         key("control, sticky")
-        app.typeText("u")
+        app.typeText(env["HERDR_TEST_KILL_LINE"] ?? "u")
         app.typeText("echo herdr-ios-ctrl-ok\n")
         sleep(1)
         snap("typed")
@@ -70,12 +72,12 @@ final class HerdrUITests: XCTestCase {
 
         // Taps click: focus the left pane with the keyboard up, then the right one with it hidden.
         let terminal = app.otherElements["terminal"]
-        terminal.coordinate(withNormalizedOffset: CGVector(dx: tapLeft, dy: 0.5)).tap()
+        terminal.coordinate(withNormalizedOffset: CGVector(dx: tapLeft, dy: 0.3)).tap()
         sleep(1)
         app.typeText("echo herdr-ios-tapped-left\n")
         key("hide keyboard")
         sleep(1)
-        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.3)).tap()
         sleep(1)
         app.buttons["Keyboard"].tap()
         sleep(1)
@@ -139,10 +141,12 @@ final class HerdrUITests: XCTestCase {
         if app.buttons["Show Sidebar"].waitForExistence(timeout: 2) { app.buttons["Show Sidebar"].tap() }
     }
 
-    private func addHost(name: String = "This Mac", hostname: String? = nil, port: String? = nil) {
+    private var hostName: String { env["HERDR_TEST_NAME"] ?? "This Mac" }
+
+    private func addHost(name: String? = nil, hostname: String? = nil, port: String? = nil) {
         app.buttons["Add Host"].firstMatch.tap()
         // Form fields are found by their placeholder prompts.
-        for (prompt, value) in [("Studio Mac", name), ("my-mac or 100.x.y.z", hostname ?? env["HERDR_TEST_HOST"] ?? "100.103.220.58"),
+        for (prompt, value) in [("Studio Mac", name ?? hostName), ("my-mac or 100.x.y.z", hostname ?? env["HERDR_TEST_HOST"] ?? "100.103.220.58"),
                                 ("james", env["HERDR_TEST_USER"] ?? "james"),
                                 ("default", env["HERDR_TEST_SESSION"] ?? "herdr-ios-test")] {
             let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", prompt)).firstMatch

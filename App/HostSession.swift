@@ -49,6 +49,8 @@ final class HostSession {
     @ObservationIgnored private var wantsConnection = false
     /// Set from background until active again; no connect path may run while it is.
     @ObservationIgnored private var inBackground = false
+    /// A live connection was dropped for the background and should come back on return.
+    @ObservationIgnored private var resumeOnActive = false
 
     var state: SessionState { connection?.state ?? .idle }
 
@@ -77,18 +79,36 @@ final class HostSession {
         dropConnection()
     }
 
-    /// Always drops the connection: without keepalives a socket iOS killed can still read
-    /// `.connected`, so returning to the foreground must reattach rather than trust it.
+    /// Drops any live connection: without keepalives a socket iOS killed can still read
+    /// `.connected`, so returning to the foreground must reattach rather than trust it. A session
+    /// the user ended, or one that failed, has no socket to lose and keeps its screen.
     func suspend() {
         inBackground = true
+        switch connection?.state {
+        case nil, .closed?, .failed?: return
+        default: break
+        }
+        resumeOnActive = true
         dropConnection()
     }
 
     func resume() {
         guard inBackground else { return }
         inBackground = false
-        if wantsConnection { isReconnect = true }
+        guard resumeOnActive else { return }
+        resumeOnActive = false
+        // Only the host on screen reattaches. herdr sizes a session's panes to its newest client,
+        // so a hidden host reattaching would reflow a desk client's panes to phone width. Hidden
+        // hosts reattach through start() when they are opened again.
+        guard terminalView.window != nil else { return }
+        isReconnect = true
         connectIfReady()
+    }
+
+    /// The saved profile changed where it connects or what it runs; a live connection moves over.
+    func profileChanged() {
+        guard connection != nil, !inBackground else { return }
+        reconnect()
     }
 
     /// The hosting view laid out; the first layout is what unblocks the initial connect.
@@ -110,7 +130,7 @@ final class HostSession {
     }
 
     private func connectIfReady() {
-        // A laid-out view keeps its grid after leaving the window, so hidden sessions reattach too.
+        // A laid-out view keeps its grid after leaving the window, so this works for hidden hosts.
         guard wantsConnection, !inBackground, connection == nil, terminalView.bounds.width > 0,
               let profile = store.hosts.first(where: { $0.id == hostID })
         else { return }
@@ -124,7 +144,7 @@ final class HostSession {
             return await self.confirm(challenge)
         }
         session.onOutput = { [weak self] bytes in
-            self?.terminalView.feed(byteArray: bytes[...])
+            self?.terminalView.feedHost(bytes)
         }
         connection = session
         let cols = terminal.cols, rows = terminal.rows

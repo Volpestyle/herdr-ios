@@ -34,6 +34,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Herdr
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           # One scene: a session's terminal view can only live in one window.

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct HostEditor: View {
     @Environment(HostStore.self) private var store
+    @Environment(SessionRegistry.self) private var sessions
     @Environment(\.dismiss) private var dismiss
     @State var host: HostProfile
     let isNew: Bool
@@ -108,7 +109,12 @@ struct HostEditor: View {
         host.username = trimmed(host.username)
         host.herdrSession = session
         host.remoteCommand = host.remoteCommand.map(trimmed).flatMap { $0.isEmpty ? nil : $0 }
+        let before = store.hosts.first { $0.id == host.id }
         store.upsert(host)
+        if let before, (before.hostname, before.port, before.username, before.platform, before.herdrSession, before.remoteCommand)
+            != (host.hostname, host.port, host.username, host.platform, host.herdrSession, host.remoteCommand) {
+            sessions.existing(host.id)?.profileChanged()
+        }
         if !password.isEmpty {
             store.setPassword(password, for: host.id)
         } else if forgetPassword {

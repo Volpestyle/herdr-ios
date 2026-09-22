@@ -38,8 +38,8 @@ flowchart LR
    also set a herdr session name (empty means herdr's default session), a command override, and a
    password fallback that is kept in the Keychain.
 5. **Connect.** Tap the host. On the first connection the app shows the host key's SHA256
-   fingerprint. Check it on the host with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`, then
-   tap Trust.
+   fingerprint. Check it on the host with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` (on
+   Windows, `ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`), then tap Trust.
 
 ## Using it
 
@@ -53,8 +53,13 @@ flowchart LR
   gets. Landscape and iPad get the desktop layout. Rotation, Split View, and Stage Manager resizes
   reflow the terminal.
 - **Hardware keyboard and pointer** work on iPad, including `ctrl+b`.
-- **Background and return.** Going to the background closes the connection. Coming back reattaches
-  every host that was connected. Switching hosts in the sidebar keeps the other hosts attached.
+- **Background and return.** Going to the background closes every live connection. Coming back
+  reattaches the host on screen. Other hosts reattach when you open them, because herdr resizes a
+  session's panes to its newest client and a hidden reattach would reflow them at your desk. A
+  session you ended with `ctrl+b q` stays ended. Switching hosts in the sidebar while the app is open
+  keeps the other hosts attached.
+- **Editing a connected host** (address, user, platform, session, command) reconnects it with the
+  new settings.
 - **Changed host key.** If a host's key changes, the connection is refused. After a legitimate
   reinstall, open Edit Host, tap Forget Host Key, and trust the new key on the next connection.
 
